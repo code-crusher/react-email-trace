@@ -1,5 +1,11 @@
 # @react-email/render
 
+## 2.3.1
+
+### Patch Changes
+
+- a126e56: Match HTML attribute names case-insensitively in unstable plain-text conversion, preserving link URLs, ordered-list offsets, and skip annotations.
+
 ## 2.3.0
 
 ### Minor Changes
