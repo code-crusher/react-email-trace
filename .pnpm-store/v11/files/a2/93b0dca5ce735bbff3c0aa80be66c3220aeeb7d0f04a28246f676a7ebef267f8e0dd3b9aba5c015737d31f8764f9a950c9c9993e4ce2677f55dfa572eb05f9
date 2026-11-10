@@ -1,0 +1,18 @@
+import * as React$1 from 'react';
+import React__default from 'react';
+
+type BaseSectionProps = {
+    style?: React.CSSProperties;
+    children?: React.ReactNode;
+};
+
+type ResponsiveColumnProps$1 = React__default.ComponentPropsWithoutRef<'table'> & {
+    span?: number;
+    tdProps?: React__default.ComponentPropsWithoutRef<'td'>;
+};
+
+type ResponsiveColumnProps = ResponsiveColumnProps$1;
+declare const isResponsiveColumn: (node: any) => node is React$1.ReactElement<ResponsiveColumnProps$1, (_props: BaseSectionProps) => React$1.JSX.Element>;
+declare const ResponsiveColumn: React$1.FC<ResponsiveColumnProps$1>;
+
+export { ResponsiveColumn, ResponsiveColumnProps, isResponsiveColumn };

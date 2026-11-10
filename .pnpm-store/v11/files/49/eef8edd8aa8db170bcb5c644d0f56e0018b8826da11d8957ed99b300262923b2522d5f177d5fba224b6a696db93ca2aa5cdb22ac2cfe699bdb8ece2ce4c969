@@ -1,0 +1,170 @@
+import { A as ThrowsErrorsBrand, C as SafeActionResult, D as ServerErrorFunctionUtils, E as ServerCodeFn, F as HandleValidationErrorsShapeFn, H as StandardSchemaV1, I as IssueWithUnionErrors, L as ValidationErrors, M as ValidationErrorsFormat, N as SafeActionClient, O as StateServerCodeFn, P as FlattenedValidationErrors, S as SafeActionFn, T as SafeStateActionFn, V as InferOutputOrDefault, _ as MiddlewareResult, a as HandleServerErrorFn, b as NormalizeActionResult, c as InferMiddlewareFnNextCtx, d as InferServerError, f as InferValidatedMiddlewareFnNextCtx, g as MiddlewareFn, h as MaybeBrandThrows, i as EffectiveThrows, j as ValidatedMiddlewareFn, k as StatefulServerCodeFn, l as InferSafeActionFnInput, m as InputSchemaFactoryFn, n as CreateClientOpts, o as InferCtx, p as InputSchemaClientOpts, r as DVES, s as InferMetadata, t as ActionCallbacks, u as InferSafeActionFnResult, v as NavigationKind, w as SafeActionUtils, x as SafeActionClientArgs, y as NonThrowingActionConstraint } from "./index.types-BHm65NPq.mjs";
+//#region src/middleware.d.ts
+/**
+ * Creates a standalone middleware function. It accepts a generic object with optional `serverError`, `ctx` and `metadata`
+ * properties, if you need one or all of them to be typed. The type for each property that is passed as generic is the
+ * **minimum** shape required to define the middleware function, but it can also be larger than that.
+ *
+ * {@link https://next-safe-action.dev/docs/define-actions/middleware#create-standalone-middleware See docs for more information}
+ */
+declare const createMiddleware: <BaseData extends {
+  serverError?: any;
+  ctx?: object;
+  metadata?: any;
+}>() => {
+  define: <NextCtx extends object>(middlewareFn: MiddlewareFn<BaseData extends {
+    serverError: infer SE;
+  } ? SE : any, BaseData extends {
+    metadata: infer Metadata;
+  } ? Metadata : any, BaseData extends {
+    ctx: infer Ctx extends object;
+  } ? Ctx : object, NextCtx>) => MiddlewareFn<BaseData extends {
+    serverError: infer SE;
+  } ? SE : any, BaseData extends {
+    metadata: infer Metadata;
+  } ? Metadata : any, BaseData extends {
+    ctx: infer Ctx extends object;
+  } ? Ctx : object, NextCtx>;
+};
+/**
+ * Creates a standalone validated middleware function. It accepts a generic object with optional `serverError`, `ctx`,
+ * `metadata`, `parsedInput`, `clientInput`, `bindArgsParsedInputs`, and `bindArgsClientInputs` properties, if you need
+ * one or all of them to be typed. The type for each property that is passed as generic is the **minimum** shape required
+ * to define the validated middleware function, but it can also be larger than that.
+ *
+ * Validated middleware runs after input validation and receives typed parsed inputs.
+ *
+ * {@link https://next-safe-action.dev/docs/define-actions/middleware#create-standalone-validated-middleware See docs for more information}
+ */
+declare const createValidatedMiddleware: <BaseData extends {
+  serverError?: any;
+  ctx?: object;
+  metadata?: any;
+  parsedInput?: unknown;
+  clientInput?: unknown;
+  bindArgsParsedInputs?: readonly unknown[];
+  bindArgsClientInputs?: readonly unknown[];
+}>() => {
+  define: <NextCtx extends object>(middlewareFn: ValidatedMiddlewareFn<BaseData extends {
+    serverError: infer SE;
+  } ? SE : any, BaseData extends {
+    metadata: infer Metadata;
+  } ? Metadata : any, BaseData extends {
+    ctx: infer Ctx extends object;
+  } ? Ctx : object, NextCtx, BaseData extends {
+    parsedInput: infer PI;
+  } ? PI : unknown, BaseData extends {
+    clientInput: infer CI;
+  } ? CI : unknown, BaseData extends {
+    bindArgsParsedInputs: infer BAPI extends readonly unknown[];
+  } ? BAPI : readonly unknown[], BaseData extends {
+    bindArgsClientInputs: infer BACI extends readonly unknown[];
+  } ? BACI : readonly unknown[]>) => ValidatedMiddlewareFn<BaseData extends {
+    serverError: infer SE;
+  } ? SE : any, BaseData extends {
+    metadata: infer Metadata;
+  } ? Metadata : any, BaseData extends {
+    ctx: infer Ctx extends object;
+  } ? Ctx : object, NextCtx, BaseData extends {
+    parsedInput: infer PI;
+  } ? PI : unknown, BaseData extends {
+    clientInput: infer CI;
+  } ? CI : unknown, BaseData extends {
+    bindArgsParsedInputs: infer BAPI extends readonly unknown[];
+  } ? BAPI : readonly unknown[], BaseData extends {
+    bindArgsClientInputs: infer BACI extends readonly unknown[];
+  } ? BACI : readonly unknown[]>;
+};
+//#endregion
+//#region src/utils.d.ts
+declare const DEFAULT_SERVER_ERROR_MESSAGE = "Something went wrong while executing the operation.";
+//#endregion
+//#region src/validation-errors.d.ts
+declare class ActionValidationError<ShapedErrors> extends Error {
+  validationErrors: ShapedErrors;
+  constructor(validationErrors: ShapedErrors, overriddenErrorMessage?: string);
+}
+declare class ActionBindArgsValidationError extends Error {
+  validationErrors: unknown[];
+  constructor(validationErrors: unknown[]);
+}
+/**
+ * Return custom validation errors to the client from the action's server code function.
+ * Code declared after this function invocation will not be executed.
+ * @param schema Input schema
+ * @param validationErrors Validation errors object
+ *
+ * {@link https://next-safe-action.dev/docs/define-actions/validation-errors#returnvalidationerrors See docs for more information}
+ */
+declare function returnValidationErrors<Schema extends StandardSchemaV1 | (() => Promise<StandardSchemaV1>), AS extends StandardSchemaV1 = Schema extends (() => Promise<StandardSchemaV1>) ? Awaited<ReturnType<Schema>> : Schema>(schema: Schema, validationErrors: ValidationErrors<AS>): never;
+/**
+ * Default validation errors format.
+ * Emulation of `zod`'s [`format`](https://zod.dev/ERROR_HANDLING?id=formatting-errors) function.
+ */
+declare function formatValidationErrors<VE extends ValidationErrors<any>>(validationErrors: VE): VE;
+/**
+ * Transform default formatted validation errors into flattened structure.
+ * `formErrors` contains global errors, and `fieldErrors` contains errors for each field,
+ * one level deep. It discards errors for nested fields.
+ * Emulation of `zod`'s [`flatten`](https://zod.dev/ERROR_HANDLING?id=flattening-errors) function.
+ * @param {ValidationErrors} [validationErrors] Validation errors object
+ *
+ * {@link https://next-safe-action.dev/docs/define-actions/validation-errors#flattenvalidationerrorsutility-function See docs for more information}
+ */
+declare function flattenValidationErrors<VE extends ValidationErrors<any>>(validationErrors: VE): {
+  formErrors: string[];
+  fieldErrors: { [K in keyof Omit<VE, "_errors">]?: string[] | undefined; };
+};
+/**
+ * This error is thrown when an action metadata is invalid, i.e. when there's a mismatch between the
+ * type of the metadata schema returned from `defineMetadataSchema` and the actual data passed.
+ */
+declare class ActionMetadataValidationError<MDS extends StandardSchemaV1 | undefined> extends Error {
+  validationErrors: ValidationErrors<MDS>;
+  constructor(validationErrors: ValidationErrors<MDS>);
+}
+/**
+ * This error is thrown when an action's data (output) is invalid, i.e. when there's a mismatch between the
+ * type of the data schema passed to `dataSchema` method and the actual return of the action.
+ */
+declare class ActionOutputDataValidationError<DS extends StandardSchemaV1 | undefined> extends Error {
+  validationErrors: ValidationErrors<DS>;
+  constructor(validationErrors: ValidationErrors<DS>);
+}
+//#endregion
+//#region src/server-error.d.ts
+/**
+ * Return a typed, expected server error to the client from the action's server code function or
+ * from middleware. Code declared after this function invocation will not be executed.
+ *
+ * The value is returned to the client as `result.serverError`, bypassing `handleServerError`,
+ * so it should conform to the client's `ServerError` type (inferred from `handleServerError`'s
+ * return type). It must be JSON-serializable, since it crosses the server/client boundary (and,
+ * with `cacheComponents` enabled, the `'use cache'` RSC boundary).
+ *
+ * @param serverError Server error value returned to the client
+ *
+ * {@link https://next-safe-action.dev/docs/concepts/error-handling#expected-server-errors-with-returnservererror See docs for more information}
+ */
+declare function returnServerError<SE>(serverError: SE): never;
+//#endregion
+//#region src/index.d.ts
+/**
+ * Detect Next.js navigation/framework errors (redirect, notFound, forbidden, unauthorized, etc.)
+ * that must be re-thrown to let the framework handle them.
+ */
+declare function isNavigationError(error: unknown): error is Error;
+/**
+ * Create a new safe action client.
+ * Works with any validation library implementing the Standard Schema v1 spec (Zod, Valibot, Yup, etc.).
+ * @param createOpts Initialization options
+ *
+ * {@link https://next-safe-action.dev/docs/define-actions/create-the-client#initialization-options See docs for more information}
+ */
+declare const createSafeActionClient: <ErrorsFormat extends ValidationErrorsFormat | undefined = undefined, ServerError = string, MetadataSchema extends StandardSchemaV1 | undefined = undefined, ThrowsValidationErrors extends boolean = false>(createOpts?: CreateClientOpts<ErrorsFormat, ServerError, MetadataSchema, ThrowsValidationErrors>) => SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, InferOutputOrDefault<MetadataSchema, undefined>, MetadataSchema extends undefined ? true : false, {}, undefined, undefined, undefined, readonly [], {
+  formErrors: string[];
+  fieldErrors: {};
+} | undefined, ThrowsValidationErrors, false, {}>;
+//#endregion
+export { ActionBindArgsValidationError, type ActionCallbacks, ActionMetadataValidationError, ActionOutputDataValidationError, ActionValidationError, type CreateClientOpts, DEFAULT_SERVER_ERROR_MESSAGE, type DVES, type EffectiveThrows, type FlattenedValidationErrors, type HandleServerErrorFn, type HandleValidationErrorsShapeFn, type InferCtx, type InferMetadata, type InferMiddlewareFnNextCtx, type InferSafeActionFnInput, type InferSafeActionFnResult, type InferServerError, type InferValidatedMiddlewareFnNextCtx, type InputSchemaClientOpts, type InputSchemaFactoryFn, type IssueWithUnionErrors, type MaybeBrandThrows, type MiddlewareFn, type MiddlewareResult, type NavigationKind, type NonThrowingActionConstraint, type NormalizeActionResult, type SafeActionClient, type SafeActionClientArgs, type SafeActionFn, type SafeActionResult, type SafeActionUtils, type SafeStateActionFn, type ServerCodeFn, type ServerErrorFunctionUtils, type StateServerCodeFn, type StatefulServerCodeFn, type ThrowsErrorsBrand, type ValidatedMiddlewareFn, type ValidationErrors, type ValidationErrorsFormat, createMiddleware, createSafeActionClient, createValidatedMiddleware, flattenValidationErrors, formatValidationErrors, isNavigationError, returnServerError, returnValidationErrors };
+//# sourceMappingURL=index.d.mts.map
