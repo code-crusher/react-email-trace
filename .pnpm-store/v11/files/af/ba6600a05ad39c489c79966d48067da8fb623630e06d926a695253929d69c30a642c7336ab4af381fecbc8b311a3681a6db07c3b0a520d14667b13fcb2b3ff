@@ -1,0 +1,578 @@
+//#region src/standard-schema.d.ts
+/** The Standard Schema interface. */
+interface StandardSchemaV1<Input = unknown, Output = Input> {
+  /** The Standard Schema properties. */
+  readonly "~standard": StandardSchemaV1.Props<Input, Output>;
+}
+declare namespace StandardSchemaV1 {
+  /** The Standard Schema properties interface. */
+  interface Props<Input = unknown, Output = Input> {
+    /** The version number of the standard. */
+    readonly version: 1;
+    /** The vendor name of the schema library. */
+    readonly vendor: string;
+    /** Validates unknown input values. */
+    readonly validate: (value: unknown) => Result<Output> | Promise<Result<Output>>;
+    /** Inferred types associated with the schema. */
+    readonly types?: Types<Input, Output> | undefined;
+  }
+  /** The result interface of the validate function. */
+  type Result<Output> = SuccessResult<Output> | FailureResult;
+  /** The result interface if validation succeeds. */
+  interface SuccessResult<Output> {
+    /** The typed output value. */
+    readonly value: Output;
+    /** The non-existent issues. */
+    readonly issues?: undefined;
+  }
+  /** The result interface if validation fails. */
+  interface FailureResult {
+    /** The issues of failed validation. */
+    readonly issues: ReadonlyArray<Issue>;
+  }
+  /** The issue interface of the failure output. */
+  interface Issue {
+    /** The error message of the issue. */
+    readonly message: string;
+    /** The path of the issue, if any. */
+    readonly path?: ReadonlyArray<PropertyKey | PathSegment> | undefined;
+  }
+  /** The path segment interface of the issue. */
+  interface PathSegment {
+    /** The key representing a path segment. */
+    readonly key: PropertyKey;
+  }
+  /** The Standard Schema types interface. */
+  interface Types<Input = unknown, Output = Input> {
+    /** The input type of the schema. */
+    readonly input: Input;
+    /** The output type of the schema. */
+    readonly output: Output;
+  }
+  /** Infers the input type of a Standard Schema. */
+  type InferInput<Schema extends StandardSchemaV1> = NonNullable<Schema["~standard"]["types"]>["input"];
+  /** Infers the output type of a Standard Schema. */
+  type InferOutput<Schema extends StandardSchemaV1> = NonNullable<Schema["~standard"]["types"]>["output"];
+}
+/** Infer the input type of an array of Standard Schemas. */
+type InferInputArray<Schemas extends readonly StandardSchemaV1[]> = { [K in keyof Schemas]: StandardSchemaV1.InferInput<Schemas[K]>; };
+/** Infer the output type of an array of Standard Schemas. */
+type InferOutputArray<Schemas extends readonly StandardSchemaV1[]> = { [K in keyof Schemas]: StandardSchemaV1.InferOutput<Schemas[K]>; };
+/** Infer the input type of a Standard Schema, or a default type if the schema is undefined. */
+type InferInputOrDefault<MaybeSchema, Default> = MaybeSchema extends StandardSchemaV1 ? StandardSchemaV1.InferInput<MaybeSchema> : Default;
+/** Infer the output type of a Standard Schema, or a default type if the schema is undefined. */
+type InferOutputOrDefault<MaybeSchema, Default> = MaybeSchema extends StandardSchemaV1 ? StandardSchemaV1.InferOutput<MaybeSchema> : Default;
+//#endregion
+//#region src/utils.types.d.ts
+type Prettify<T> = { [K in keyof T]: T[K]; } & {};
+type MaybePromise<T> = Promise<T> | T;
+type MaybeArray<T> = T | T[];
+//#endregion
+//#region src/validation-errors.types.d.ts
+type PrimitiveOrArray = number | string | boolean | bigint | symbol | null | undefined | any[];
+type ValidationErrorNode<K = undefined> = K extends any[] ? MaybeArray<{
+  _errors?: string[];
+}> : {
+  _errors?: string[];
+};
+type SchemaErrors<Schema> = { [K in keyof Schema]?: Schema[K] extends PrimitiveOrArray ? Prettify<ValidationErrorNode<Schema[K]>> : Prettify<ValidationErrorNode> & SchemaErrors<Schema[K]>; } & {};
+type IssueWithUnionErrors = StandardSchemaV1.Issue & {
+  unionErrors?: {
+    issues: StandardSchemaV1.Issue[];
+  }[];
+};
+/**
+ * Type of the returned object when validation fails.
+ */
+type ValidationErrors<Schema extends StandardSchemaV1 | undefined> = Schema extends StandardSchemaV1 ? StandardSchemaV1.InferOutput<Schema> extends PrimitiveOrArray ? Prettify<ValidationErrorNode> : Prettify<ValidationErrorNode> & SchemaErrors<StandardSchemaV1.InferOutput<Schema>> : undefined;
+/**
+ * Type of flattened validation errors. `formErrors` contains global errors, and `fieldErrors`
+ * contains errors for each field, one level deep.
+ */
+type FlattenedValidationErrors<VE extends ValidationErrors<any>> = Prettify<{
+  formErrors: string[];
+  fieldErrors: { [K in keyof Omit<VE, "_errors">]?: string[]; };
+}>;
+/**
+ * Type of the function used to format validation errors.
+ */
+type HandleValidationErrorsShapeFn<Schema extends StandardSchemaV1 | undefined, BindArgsSchemas extends readonly StandardSchemaV1[], Metadata, Ctx extends object, ShapedErrors> = (validationErrors: ValidationErrors<Schema>, utils: {
+  clientInput: InferInputOrDefault<Schema, undefined>;
+  bindArgsClientInputs: InferInputArray<BindArgsSchemas>;
+  metadata: Metadata;
+  ctx: Prettify<Ctx>;
+}) => Promise<ShapedErrors>;
+//#endregion
+//#region src/safe-action-client.d.ts
+declare class SafeActionClient<ServerError, ErrorsFormat extends ValidationErrorsFormat | undefined // override default validation errors shape
+, MetadataSchema extends StandardSchemaV1 | undefined = undefined, Metadata = InferOutputOrDefault<MetadataSchema, undefined> // metadata type (inferred from metadata schema)
+, HasMetadata extends boolean = MetadataSchema extends undefined ? true : false, Ctx extends object = {}, InputSchemaFn extends ((clientInput?: unknown) => Promise<StandardSchemaV1>) | undefined = undefined // input schema function
+, InputSchema extends StandardSchemaV1 | undefined = InputSchemaFn extends Function ? Awaited<ReturnType<InputSchemaFn>> : undefined // input schema
+, OutputSchema extends StandardSchemaV1 | undefined = undefined // output schema
+, const BindArgsSchemas extends readonly StandardSchemaV1[] = [], ShapedErrors = undefined, ThrowsValidationErrors extends boolean = false, HasValidatedMiddleware extends boolean = false, PreValidationCtx extends object = Ctx> {
+  #private;
+  constructor(args: SafeActionClientArgs<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx>);
+  /**
+   * Use a middleware function. Middleware added via `use()` always runs **before** input validation.
+   * Cannot be called after `useValidated()`.
+   * @param middlewareFn Middleware function
+   *
+   * {@link https://next-safe-action.dev/docs/define-actions/instance-methods#use See docs for more information}
+   */
+  use<NextCtx extends object>(this: HasValidatedMiddleware extends false ? SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx> : never, middlewareFn: MiddlewareFn<ServerError, Metadata, Ctx, Ctx & NextCtx>): SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx & NextCtx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, false, PreValidationCtx & NextCtx>;
+  /**
+   * Use a validated middleware function. Middleware added via `useValidated()` runs **after** input
+   * validation and receives typed `parsedInput` and `bindArgsParsedInputs`. Follows the onion model:
+   * code before `next()` runs pre-action, code after `next()` runs post-action with access to the result.
+   *
+   * Requires `inputSchema()` or `bindArgsSchemas()` to be called before. After calling `useValidated()`,
+   * `inputSchema()`, `bindArgsSchemas()`, and `use()` can no longer be called.
+   *
+   * @example
+   * ```ts
+   * authClient
+   *   .inputSchema(z.object({ postId: z.string() }))
+   *   .useValidated(async ({ parsedInput, ctx, next }) => {
+   *     const post = await db.post.findUnique({ where: { id: parsedInput.postId } });
+   *     if (post?.authorId !== ctx.user.id) throw new Error("Forbidden");
+   *     return next({ ctx: { post } });
+   *   })
+   * ```
+   *
+   * @param middlewareFn Validated middleware function
+   *
+   * {@link https://next-safe-action.dev/docs/define-actions/instance-methods#usevalidated See docs for more information}
+   */
+  useValidated<NextCtx extends object>(this: [InputSchema, BindArgsSchemas] extends [undefined, readonly []] ? never : SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx>, middlewareFn: ValidatedMiddlewareFn<ServerError, Metadata, Ctx, Ctx & NextCtx, InferOutputOrDefault<InputSchema, undefined>, InferInputOrDefault<InputSchema, undefined>, InferOutputArray<BindArgsSchemas>, InferInputArray<BindArgsSchemas>>): SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx & NextCtx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, true, PreValidationCtx>;
+  /**
+   * Define metadata for the action.
+   * @param data Metadata with the same type as the return value of the [`defineMetadataSchema`](https://next-safe-action.dev/docs/define-actions/create-the-client#definemetadataschema) optional initialization function
+   *
+   * {@link https://next-safe-action.dev/docs/define-actions/instance-methods#metadata See docs for more information}
+   */
+  metadata(data: Metadata): SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, true, Ctx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx>;
+  /**
+   * Define the input validation schema for the action.
+   * Cannot be called after `useValidated()`.
+   * @param inputSchema Input validation schema
+   * @param utils Optional utils object
+   *
+   * {@link https://next-safe-action.dev/docs/define-actions/create-the-client#inputschema See docs for more information}
+   */
+  inputSchema<OIS extends StandardSchemaV1 | InputSchemaFactoryFn<InputSchema> // override input schema
+  , AIS extends StandardSchemaV1 = OIS extends InputSchemaFactoryFn<InputSchema, infer NextSchema> ? NextSchema : OIS, OShapedErrors = ErrorsFormat extends "flattened" ? FlattenedValidationErrors<ValidationErrors<AIS>> : ValidationErrors<AIS>>(this: HasValidatedMiddleware extends false ? SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx> : never, inputSchema: OIS, utils?: {
+    handleValidationErrorsShape?: HandleValidationErrorsShapeFn<AIS, BindArgsSchemas, Metadata, Ctx, OShapedErrors>;
+  }): SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, AIS, OutputSchema, BindArgsSchemas, OShapedErrors, ThrowsValidationErrors, false, PreValidationCtx>;
+  /**
+   * @deprecated Alias for `inputSchema` method. Use that instead.
+   */
+  schema: <OIS extends StandardSchemaV1 | InputSchemaFactoryFn<InputSchema>, AIS extends StandardSchemaV1 = OIS extends InputSchemaFactoryFn<InputSchema, infer NextSchema extends StandardSchemaV1<unknown, unknown>> ? NextSchema : OIS, OShapedErrors = ErrorsFormat extends "flattened" ? {
+    formErrors: string[];
+    fieldErrors: { [K in keyof Omit<ValidationErrors<AIS>, "_errors">]?: string[] | undefined; };
+  } : ValidationErrors<AIS>>(this: HasValidatedMiddleware extends false ? SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx> : never, inputSchema: OIS, utils?: {
+    handleValidationErrorsShape?: HandleValidationErrorsShapeFn<AIS, BindArgsSchemas, Metadata, Ctx, OShapedErrors>;
+  }) => SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, AIS, OutputSchema, BindArgsSchemas, OShapedErrors, ThrowsValidationErrors, false, PreValidationCtx>;
+  /**
+   * Define the bind args input validation schema for the action.
+   * Cannot be called after `useValidated()`.
+   * @param bindArgsSchemas Bind args input validation schemas
+   *
+   * {@link https://next-safe-action.dev/docs/define-actions/instance-methods#bindargsschemas See docs for more information}
+   */
+  bindArgsSchemas<const OBindArgsSchemas extends readonly StandardSchemaV1[]>(this: HasValidatedMiddleware extends false ? SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx> : never, bindArgsSchemas: OBindArgsSchemas): SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OutputSchema, OBindArgsSchemas, ShapedErrors, ThrowsValidationErrors, false, PreValidationCtx>;
+  /**
+   * Define the output data validation schema for the action.
+   * @param schema Output data validation schema
+   *
+   * {@link https://next-safe-action.dev/docs/define-actions/create-the-client#outputschema See docs for more information}
+   */
+  outputSchema<OOS extends StandardSchemaV1>(dataSchema: OOS): SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OOS, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx>;
+  /**
+   * Define the action.
+   * @param serverCodeFn Code that will be executed on the **server side**
+   * @param [cb] Optional callbacks that will be called after action execution, on the server.
+   *
+   * {@link https://next-safe-action.dev/docs/define-actions/instance-methods#action--stateaction See docs for more information}
+   */
+  action<Data extends InferOutputOrDefault<OutputSchema, any>, Utils extends ActionCallbacks<ServerError, Metadata, Ctx, InputSchema, BindArgsSchemas, ShapedErrors, Data, PreValidationCtx> = ActionCallbacks<ServerError, Metadata, Ctx, InputSchema, BindArgsSchemas, ShapedErrors, Data, PreValidationCtx>>(this: HasMetadata extends true ? SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx> : never, serverCodeFn: ServerCodeFn<Metadata, Ctx, InputSchema, BindArgsSchemas, Data>, utils?: Utils): MaybeBrandThrows<SafeActionFn<ServerError, InputSchema, BindArgsSchemas, ShapedErrors, Data>, EffectiveThrows<ThrowsValidationErrors, Utils>>;
+  /**
+   * Define the stateful action.
+   * To be used with the [`useStateAction`](https://next-safe-action.dev/docs/execute-actions/hooks/usestateaction) hook.
+   * @param serverCodeFn Code that will be executed on the **server side**
+   * @param [cb] Optional callbacks that will be called after action execution, on the server.
+   *
+   * {@link https://next-safe-action.dev/docs/define-actions/instance-methods#action--stateaction See docs for more information}
+   */
+  stateAction<Data extends InferOutputOrDefault<OutputSchema, any>, Utils extends ActionCallbacks<ServerError, Metadata, Ctx, InputSchema, BindArgsSchemas, ShapedErrors, Data, PreValidationCtx> = ActionCallbacks<ServerError, Metadata, Ctx, InputSchema, BindArgsSchemas, ShapedErrors, Data, PreValidationCtx>>(this: HasMetadata extends true ? SafeActionClient<ServerError, ErrorsFormat, MetadataSchema, Metadata, HasMetadata, Ctx, InputSchemaFn, InputSchema, OutputSchema, BindArgsSchemas, ShapedErrors, ThrowsValidationErrors, HasValidatedMiddleware, PreValidationCtx> : never, serverCodeFn: StatefulServerCodeFn<ServerError, Metadata, Ctx, InputSchema, BindArgsSchemas, ShapedErrors, Data>, utils?: Utils): MaybeBrandThrows<SafeStateActionFn<ServerError, InputSchema, BindArgsSchemas, ShapedErrors, Data>, EffectiveThrows<ThrowsValidationErrors, Utils>>;
+}
+//#endregion
+//#region src/index.types.d.ts
+/**
+ * Type of the default validation errors shape passed to `createSafeActionClient` via `defaultValidationErrorsShape`
+ * property.
+ */
+type ValidationErrorsFormat = "formatted" | "flattened";
+/**
+ * Type of the options passed to the input schema factory function.
+ */
+type InputSchemaClientOpts = {
+  clientInput: unknown;
+};
+/**
+ * Type of the input schema factory function.
+ */
+type InputSchemaFactoryFn<PrevSchema extends StandardSchemaV1 | undefined, NextSchema extends StandardSchemaV1 = StandardSchemaV1> = (prevSchema: PrevSchema, opts: InputSchemaClientOpts) => Promise<NextSchema>;
+/**
+ * Type of the util properties passed to server error handler functions.
+ */
+type ServerErrorFunctionUtils<MetadataSchema extends StandardSchemaV1 | undefined> = {
+  clientInput: unknown;
+  bindArgsClientInputs: unknown[];
+  ctx: object;
+  metadata: InferOutputOrDefault<MetadataSchema, undefined>;
+};
+type HandleServerErrorFn<ServerError = string, MetadataSchema extends StandardSchemaV1 | undefined = undefined> = (error: Error, utils: ServerErrorFunctionUtils<MetadataSchema>) => MaybePromise<ServerError>;
+/**
+ * Brand applied to action functions created from clients with `throwValidationErrors: true`.
+ * Used by adapters (e.g., TanStack Query) to reject incompatible actions at the type level.
+ */
+declare const THROWS_ERRORS: unique symbol;
+type ThrowsErrorsBrand = {
+  readonly [THROWS_ERRORS]: true;
+};
+/**
+ * Conditionally brand a type based on whether throws is enabled.
+ */
+type MaybeBrandThrows<T, Throws extends boolean> = Throws extends true ? T & ThrowsErrorsBrand : T;
+/**
+ * Constraint type that rejects actions branded with `ThrowsErrorsBrand`.
+ * Used by adapters (e.g., TanStack Query) to ensure only non-throwing actions are accepted.
+ * An optional `never` property means: absent is OK, but present-with-a-value fails.
+ */
+type NonThrowingActionConstraint = {
+  readonly [THROWS_ERRORS]?: never;
+};
+/**
+ * Detect if action-level `throwServerError` is set to `true`.
+ */
+type ActionUtilsThrowServer<U> = U extends {
+  throwServerError: true;
+} ? true : false;
+/**
+ * Detect if action-level `throwValidationErrors` is set to `true` (or the object form with `overrideErrorMessage`).
+ * Returns `true` if enabled, `false` if explicitly disabled, `undefined` if not specified.
+ */
+type ActionUtilsThrowValidation<U> = U extends {
+  throwValidationErrors: true | {
+    overrideErrorMessage: (...args: any[]) => any;
+  };
+} ? true : U extends {
+  throwValidationErrors: false;
+} ? false : undefined;
+/**
+ * Determine whether an action effectively throws errors, combining client-level and action-level settings.
+ * Action-level settings take precedence over client-level defaults.
+ */
+type EffectiveThrows<ClientThrows extends boolean, U> = ActionUtilsThrowServer<U> extends true ? true : ActionUtilsThrowValidation<U> extends true ? true : ActionUtilsThrowValidation<U> extends false ? false : ClientThrows;
+/**
+ * Type of the arguments passed to the `SafeActionClient` constructor.
+ */
+type SafeActionClientArgs<ServerError, ErrorsFormat extends ValidationErrorsFormat | undefined // override default validation errors shape
+, MetadataSchema extends StandardSchemaV1 | undefined = undefined, Metadata = InferOutputOrDefault<MetadataSchema, undefined> // metadata type (inferred from metadata schema)
+, HasMetadata extends boolean = MetadataSchema extends undefined ? true : false, Ctx extends object = {}, InputSchemaFn extends ((clientInput?: unknown) => Promise<StandardSchemaV1>) | undefined = undefined // input schema function
+, InputSchema extends StandardSchemaV1 | undefined = InputSchemaFn extends Function ? Awaited<ReturnType<InputSchemaFn>> : undefined // input schema
+, OutputSchema extends StandardSchemaV1 | undefined = undefined // output schema
+, BindArgsSchemas extends readonly StandardSchemaV1[] = [] // bind args schemas
+, ShapedErrors = undefined // custom validation errors shape
+, ThrowsValidationErrors extends boolean = false // whether the client throws validation errors
+, HasValidatedMiddleware extends boolean = false // whether useValidated() has been called
+, PreValidationCtx extends object = Ctx> = {
+  middlewareFns: MiddlewareFn<ServerError, any, any, any>[];
+  validatedMiddlewareFns: ValidatedMiddlewareFn<ServerError, any, any, any, any, any, any, any>[];
+  metadataSchema: MetadataSchema;
+  metadata: Metadata;
+  metadataProvided?: HasMetadata;
+  inputSchemaFn: InputSchemaFn;
+  outputSchema: OutputSchema;
+  bindArgsSchemas: BindArgsSchemas;
+  handleValidationErrorsShape: HandleValidationErrorsShapeFn<InputSchema, BindArgsSchemas, Metadata, Ctx, ShapedErrors>;
+  ctxType: Ctx;
+  preValidationCtxType: PreValidationCtx;
+  handleServerError: HandleServerErrorFn<ServerError, MetadataSchema>;
+  defaultValidationErrorsShape: ErrorsFormat;
+  throwValidationErrors: ThrowsValidationErrors;
+  hasValidatedMiddleware?: HasValidatedMiddleware;
+};
+/**
+ * Type of options when creating a new safe action client.
+ */
+type CreateClientOpts<ErrorsFormat extends ValidationErrorsFormat | undefined = undefined, ServerError = string, MetadataSchema extends StandardSchemaV1 | undefined = undefined, ThrowsValidationErrors extends boolean = false> = {
+  defineMetadataSchema?: () => MetadataSchema;
+  handleServerError?: HandleServerErrorFn<ServerError, MetadataSchema>;
+  defaultValidationErrorsShape?: ErrorsFormat;
+  throwValidationErrors?: ThrowsValidationErrors;
+};
+/**
+ * Type of the result of a safe action.
+ *
+ * Modeled as a discriminated union so that checking one field narrows the
+ * others to `undefined`. The runtime guarantees mutual exclusion (see
+ * `buildResultAndRunCallbacks` in `action-builder.ts`), and this type makes
+ * that guarantee visible to consumers:
+ *
+ * ```ts
+ * const { data, serverError, validationErrors } = await myAction(input);
+ *
+ * if (data) {
+ *   // TS knows serverError and validationErrors are undefined here
+ * }
+ * ```
+ *
+ * Branches:
+ * - idle / initial state (e.g. `useAction`'s `useState<Result>({})`)
+ * - success (only `data` is set)
+ * - server error (only `serverError` is set)
+ * - validation error (only `validationErrors` is set)
+ *
+ * Note: when `Data` is `void` (the action returns nothing), the success
+ * branch's `data` becomes `void`, which is indistinguishable from the idle
+ * branch's `data?: undefined` at read time. Hook return types apply
+ * `NormalizeActionResult` at the boundary to drop the void-success branch
+ * entirely, giving `result.data` an exact `undefined` type.
+ *
+ * `NormalizeActionResult` is NOT applied on `SafeActionFn`/`SafeStateActionFn`
+ * return types because doing so causes TypeScript to eagerly expand the
+ * discriminated union when `.bind()` is used, breaking generic inference for
+ * hooks (the `Schema` parameter falls back to `StandardSchemaV1<unknown, unknown>`).
+ */
+type SafeActionResult<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors = ValidationErrors<Schema>, Data = unknown, NextCtx = object> = {
+  data?: undefined;
+  serverError?: undefined;
+  validationErrors?: undefined;
+} | {
+  data: Data;
+  serverError?: undefined;
+  validationErrors?: undefined;
+} | {
+  data?: undefined;
+  serverError: ServerError;
+  validationErrors?: undefined;
+} | {
+  data?: undefined;
+  serverError?: undefined;
+  validationErrors: ShapedErrors;
+};
+/**
+ * Collapses the void-success branch of a `SafeActionResult` union.
+ *
+ * The runtime never emits `{ data: undefined }` for a void-returning action
+ * (see `buildResultAndRunCallbacks` in `action-builder.ts` — it only sets
+ * `data` when `middlewareResult.data !== undefined`). For user-facing types,
+ * we drop the `{ data: void }` branch so that `r.data` narrows to exactly
+ * `undefined` instead of `void | undefined`.
+ *
+ * This is a distributive conditional — each member of the input union is
+ * checked individually. Only the exact `{ data: void }` shape is excluded;
+ * other branches (idle, server error, validation error) pass through.
+ *
+ * When `Data` is not exactly `void`, the success branch doesn't match the
+ * filter and the whole union is returned unchanged.
+ */
+type NormalizeActionResult<R> = R extends {
+  data: infer D;
+} ? [D] extends [void] ? Exclude<R, {
+  data: D;
+}> : R : R;
+/**
+ * Type of the function called from components with type safe input data.
+ */
+type SafeActionFn<ServerError, Schema extends StandardSchemaV1 | undefined, BindArgsSchemas extends readonly StandardSchemaV1[], ShapedErrors, Data> = (...clientInputs: [...bindArgsInputs: InferInputArray<BindArgsSchemas>, input: InferInputOrDefault<Schema, void>]) => Promise<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>;
+/**
+ * Type of the stateful function called from components with type safe input data.
+ */
+type SafeStateActionFn<ServerError, Schema extends StandardSchemaV1 | undefined, BindArgsSchemas extends readonly StandardSchemaV1[], ShapedErrors, Data> = (...clientInputs: [...bindArgsInputs: InferInputArray<BindArgsSchemas>, prevResult: Prettify<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>, input: InferInputOrDefault<Schema, void>]) => Promise<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>;
+/**
+ * Type of the result of a middleware function. Carries the same data/error fields as
+ * `SafeActionResult` plus internal bookkeeping (navigation kind, parsed inputs, context,
+ * success flag).
+ *
+ * This is intentionally a flat object rather than `SafeActionResult & { ... }`, because
+ * `SafeActionResult` is now a discriminated union and intersecting it with additional
+ * fields would prevent mutation of `data`/`serverError`/`validationErrors` during
+ * middleware execution. The public shape (the set of readable fields) is unchanged.
+ *
+ * `NextCtx` is a phantom generic parameter kept for backward compatibility with the
+ * previous signature — it is intentionally unused in the body so that
+ * `MiddlewareResult<SE, A>` and `MiddlewareResult<SE, B>` remain mutually assignable
+ * (as they were when this type intersected `SafeActionResult<..., NextCtx>`, where
+ * `NextCtx` was likewise phantom).
+ */
+type MiddlewareResult<ServerError, NextCtx extends object> = {
+  data?: any;
+  serverError?: ServerError;
+  validationErrors?: any;
+  navigationKind?: NavigationKind;
+  parsedInput?: unknown;
+  bindArgsParsedInputs?: unknown[];
+  ctx?: object;
+  success: boolean;
+};
+/**
+ * Type of the middleware function passed to a safe action client.
+ */
+type MiddlewareFn<ServerError, Metadata, Ctx extends object, NextCtx extends object> = {
+  (opts: {
+    clientInput: unknown;
+    bindArgsClientInputs: unknown[];
+    ctx: Prettify<Ctx>;
+    metadata: Metadata;
+    next: {
+      <NC extends object = {}>(opts?: {
+        ctx?: NC;
+      }): Promise<MiddlewareResult<ServerError, NC>>;
+    };
+  }): Promise<MiddlewareResult<ServerError, NextCtx>>;
+};
+/**
+ * Type of the validated middleware function passed to a safe action client via `useValidated()`.
+ * Executed after input validation, receives typed parsed inputs.
+ */
+type ValidatedMiddlewareFn<ServerError, Metadata, Ctx extends object, NextCtx extends object, ParsedInput = unknown, ClientInput = unknown, BindArgsParsedInputs extends readonly unknown[] = readonly unknown[], BindArgsClientInputs extends readonly unknown[] = readonly unknown[]> = {
+  (opts: {
+    parsedInput: ParsedInput;
+    clientInput: ClientInput;
+    bindArgsParsedInputs: BindArgsParsedInputs;
+    bindArgsClientInputs: BindArgsClientInputs;
+    ctx: Prettify<Ctx>;
+    metadata: Metadata;
+    next: {
+      <NC extends object = {}>(opts?: {
+        ctx?: NC;
+      }): Promise<MiddlewareResult<ServerError, NC>>;
+    };
+  }): Promise<MiddlewareResult<ServerError, NextCtx>>;
+};
+/**
+ * Type of the function that executes server code when defining a new safe action.
+ */
+type ServerCodeFn<Metadata, Ctx extends object, Schema extends StandardSchemaV1 | undefined, BindArgsSchemas extends readonly StandardSchemaV1[], Data> = (args: {
+  parsedInput: InferOutputOrDefault<Schema, undefined>;
+  clientInput: InferInputOrDefault<Schema, undefined>;
+  bindArgsParsedInputs: InferOutputArray<BindArgsSchemas>;
+  bindArgsClientInputs: InferInputArray<BindArgsSchemas>;
+  ctx: Prettify<Ctx>;
+  metadata: Metadata;
+}) => Promise<Data>;
+/**
+ * Type of the function that executes server code when defining a new stateful safe action.
+ */
+type StatefulServerCodeFn<ServerError, Metadata, Ctx extends object, Schema extends StandardSchemaV1 | undefined, BindArgsSchemas extends readonly StandardSchemaV1[], ShapedErrors, Data> = (args: {
+  parsedInput: InferOutputOrDefault<Schema, undefined>;
+  clientInput: InferInputOrDefault<Schema, undefined>;
+  bindArgsParsedInputs: InferOutputArray<BindArgsSchemas>;
+  bindArgsClientInputs: InferInputArray<BindArgsSchemas>;
+  ctx: Prettify<Ctx>;
+  metadata: Metadata;
+}, utils: {
+  prevResult: Prettify<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>;
+}) => Promise<Data>;
+/**
+ * Possible types of navigation.
+ */
+type NavigationKind = "redirect" | "notFound" | "forbidden" | "unauthorized" | "other";
+/**
+ * Type of action execution callbacks and options.
+ */
+type ActionCallbacks<ServerError, Metadata, Ctx extends object, Schema extends StandardSchemaV1 | undefined, BindArgsSchemas extends readonly StandardSchemaV1[], ShapedErrors, Data, PreValidationCtx extends object = Ctx> = {
+  throwServerError?: boolean;
+  throwValidationErrors?: boolean | {
+    overrideErrorMessage: (validationErrors: ShapedErrors) => Promise<string>;
+  };
+  onSuccess?: (args: {
+    data?: Data;
+    metadata: Metadata;
+    ctx?: Prettify<Ctx>;
+    clientInput: InferInputOrDefault<Schema, undefined>;
+    bindArgsClientInputs: InferInputArray<BindArgsSchemas>;
+    parsedInput: InferOutputOrDefault<Schema, undefined>;
+    bindArgsParsedInputs: InferOutputArray<BindArgsSchemas>;
+  }) => Promise<unknown>;
+  onNavigation?: (args: {
+    metadata: Metadata;
+    ctx?: Prettify<PreValidationCtx & Partial<Ctx>>;
+    clientInput: InferInputOrDefault<Schema, undefined>;
+    bindArgsClientInputs: InferInputArray<BindArgsSchemas>;
+    navigationKind: NavigationKind;
+  }) => Promise<unknown>;
+  onError?: (args: {
+    error: Prettify<Omit<SafeActionResult<ServerError, Schema, ShapedErrors, Data>, "data">>;
+    metadata: Metadata;
+    ctx?: Prettify<PreValidationCtx & Partial<Ctx>>;
+    clientInput: InferInputOrDefault<Schema, undefined>;
+    bindArgsClientInputs: InferInputArray<BindArgsSchemas>;
+  }) => Promise<unknown>;
+  onSettled?: (args: {
+    result: Prettify<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>;
+    metadata: Metadata;
+    ctx?: Prettify<PreValidationCtx & Partial<Ctx>>;
+    clientInput: InferInputOrDefault<Schema, undefined>;
+    bindArgsClientInputs: InferInputArray<BindArgsSchemas>;
+    navigationKind?: NavigationKind;
+  }) => Promise<unknown>;
+};
+/**
+ * Infer input types of a safe action.
+ */
+type InferSafeActionFnInput<T extends Function> = T extends SafeActionFn<any, infer Schema extends StandardSchemaV1 | undefined, infer BindArgsSchemas extends readonly StandardSchemaV1[], any, any> | SafeStateActionFn<any, infer Schema extends StandardSchemaV1 | undefined, infer BindArgsSchemas extends readonly StandardSchemaV1[], any, any> ? Schema extends StandardSchemaV1 ? {
+  clientInput: StandardSchemaV1.InferInput<Schema>;
+  bindArgsClientInputs: InferInputArray<BindArgsSchemas>;
+  parsedInput: StandardSchemaV1.InferOutput<Schema>;
+  bindArgsParsedInputs: InferOutputArray<BindArgsSchemas>;
+} : {
+  clientInput: undefined;
+  bindArgsClientInputs: InferInputArray<BindArgsSchemas>;
+  parsedInput: undefined;
+  bindArgsParsedInputs: InferOutputArray<BindArgsSchemas>;
+} : never;
+/**
+ * Infer the result type of a safe action.
+ */
+type InferSafeActionFnResult<T extends Function> = T extends ((...args: any[]) => Promise<infer R>) ? R : never;
+/**
+ * Infer the next context type returned by a middleware function using the `next` function.
+ */
+type InferMiddlewareFnNextCtx<T> = T extends MiddlewareFn<any, any, any, infer NextCtx extends object> ? NextCtx : never;
+/**
+ * Infer the next context type returned by a validated middleware function using the `next` function.
+ */
+type InferValidatedMiddlewareFnNextCtx<T> = T extends ValidatedMiddlewareFn<any, any, any, infer NextCtx extends object, any, any, any, any> ? NextCtx : never;
+/**
+ * Infer the context type of a safe action client or middleware function.
+ */
+type InferCtx<T> = T extends SafeActionClient<any, any, any, any, false, infer Ctx extends object, any, any, any, any, any, any, any, any> | MiddlewareFn<any, any, infer Ctx extends object, any> | ValidatedMiddlewareFn<any, any, infer Ctx extends object, any, any, any, any, any> ? Ctx : never;
+/**
+ * Infer the metadata type of a safe action client or middleware function.
+ */
+type InferMetadata<T> = T extends SafeActionClient<any, any, any, infer Metadata, false, any, any, any, any, any, any, any, any, any> | MiddlewareFn<any, infer Metadata, any, any> | ValidatedMiddlewareFn<any, infer Metadata, any, any, any, any, any, any> ? Metadata : never;
+/**
+ * Infer the server error type from a safe action client or a middleware function or a safe action function.
+ */
+type InferServerError<T> = T extends SafeActionClient<infer ServerError, any, any, any, any, any, any, any, any, any, any, any, any, any> | MiddlewareFn<infer ServerError, any, any, any> | ValidatedMiddlewareFn<infer ServerError, any, any, any, any, any, any, any> | SafeActionFn<infer ServerError, any, any, any, any> | SafeStateActionFn<infer ServerError, any, any, any, any> ? ServerError : never;
+/**
+ * Deprecated aliases kept for backward compatibility.
+ */
+/**
+ * @deprecated Use `ValidationErrorsFormat` instead.
+ */
+type DVES = ValidationErrorsFormat;
+/**
+ * @deprecated Use `StatefulServerCodeFn` instead.
+ */
+type StateServerCodeFn<ServerError, Metadata, Ctx extends object, Schema extends StandardSchemaV1 | undefined, BindArgsSchemas extends readonly StandardSchemaV1[], ShapedErrors, Data> = StatefulServerCodeFn<ServerError, Metadata, Ctx, Schema, BindArgsSchemas, ShapedErrors, Data>;
+/**
+ * @deprecated Use `ActionCallbacks` instead.
+ */
+type SafeActionUtils<ServerError, Metadata, Ctx extends object, Schema extends StandardSchemaV1 | undefined, BindArgsSchemas extends readonly StandardSchemaV1[], ShapedErrors, Data> = ActionCallbacks<ServerError, Metadata, Ctx, Schema, BindArgsSchemas, ShapedErrors, Data>;
+//#endregion
+export { ThrowsErrorsBrand as A, InferInputOrDefault as B, SafeActionResult as C, ServerErrorFunctionUtils as D, ServerCodeFn as E, HandleValidationErrorsShapeFn as F, StandardSchemaV1 as H, IssueWithUnionErrors as I, ValidationErrors as L, ValidationErrorsFormat as M, SafeActionClient as N, StateServerCodeFn as O, FlattenedValidationErrors as P, MaybePromise as R, SafeActionFn as S, SafeStateActionFn as T, InferOutputOrDefault as V, MiddlewareResult as _, HandleServerErrorFn as a, NormalizeActionResult as b, InferMiddlewareFnNextCtx as c, InferServerError as d, InferValidatedMiddlewareFnNextCtx as f, MiddlewareFn as g, MaybeBrandThrows as h, EffectiveThrows as i, ValidatedMiddlewareFn as j, StatefulServerCodeFn as k, InferSafeActionFnInput as l, InputSchemaFactoryFn as m, CreateClientOpts as n, InferCtx as o, InputSchemaClientOpts as p, DVES as r, InferMetadata as s, ActionCallbacks as t, InferSafeActionFnResult as u, NavigationKind as v, SafeActionUtils as w, SafeActionClientArgs as x, NonThrowingActionConstraint as y, Prettify as z };
+//# sourceMappingURL=index.types-BHm65NPq.d.mts.map

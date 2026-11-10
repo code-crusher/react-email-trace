@@ -1,0 +1,334 @@
+import { B as InferInputOrDefault, C as SafeActionResult, H as StandardSchemaV1, R as MaybePromise, S as SafeActionFn, T as SafeStateActionFn, b as NormalizeActionResult, v as NavigationKind, z as Prettify } from "./index.types-BHm65NPq.mjs";
+//#region src/hooks.types.d.ts
+/**
+ * Hook options: configuration + lifecycle callbacks.
+ *
+ * When `throwOnNavigation` is `true`, `onNavigation` and `onSettled` callbacks are not available
+ * because the render-phase throw prevents React from committing effects. This is a fundamental
+ * constraint of React's rendering model: when a component throws during render, the commit phase
+ * (where effects run) is never reached.
+ *
+ * Use server-side action callbacks for guaranteed navigation side effects.
+ */
+type HookBaseOptions<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data> = ({
+  throwOnNavigation?: false;
+} & HookCallbacks<ServerError, Schema, ShapedErrors, Data>) | ({
+  throwOnNavigation: true;
+} & Omit<HookCallbacks<ServerError, Schema, ShapedErrors, Data>, "onNavigation" | "onSettled">);
+/**
+ * Type of hooks callbacks. These are executed when action is in a specific state.
+ */
+type HookCallbacks<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data> = {
+  onExecute?: (args: {
+    input: InferInputOrDefault<Schema, undefined>;
+  }) => MaybePromise<unknown>;
+  onSuccess?: (args: {
+    data: Data;
+    input: InferInputOrDefault<Schema, undefined>;
+  }) => MaybePromise<unknown>;
+  onError?: (args: {
+    error: Prettify<Omit<SafeActionResult<ServerError, Schema, ShapedErrors, Data>, "data">> & {
+      thrownError?: Error;
+    };
+    input: InferInputOrDefault<Schema, undefined>;
+  }) => MaybePromise<unknown>;
+  onNavigation?: (args: {
+    input: InferInputOrDefault<Schema, undefined>;
+    navigationKind: NavigationKind;
+  }) => MaybePromise<unknown>;
+  onSettled?: (args: {
+    result: Prettify<NormalizeActionResult<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>>;
+    input: InferInputOrDefault<Schema, undefined>;
+    navigationKind?: NavigationKind;
+  }) => MaybePromise<unknown>;
+};
+/**
+ * Type of the safe action function passed to hooks. Same as `SafeActionFn` except it accepts
+ * just a single input, without bind arguments.
+ */
+type SingleInputActionFn<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data> = (input: InferInputOrDefault<Schema, undefined>) => Promise<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>;
+/**
+ * Type of the stateful safe action function passed to hooks. Same as `SafeStateActionFn` except it accepts
+ * just a single input, without bind arguments.
+ */
+type SingleInputStateActionFn<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data> = (prevResult: SafeActionResult<ServerError, Schema, ShapedErrors, Data>, input: InferInputOrDefault<Schema, undefined>) => Promise<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>;
+/**
+ * Type of the action status returned by `useAction`, `useOptimisticAction` and `useStateAction` hooks.
+ */
+type HookActionStatus = "idle" | "executing" | "hasSucceeded" | "hasErrored" | "hasNavigated";
+/**
+ * Type of the shorthand status object returned by `useAction`, `useOptimisticAction` and `useStateAction` hooks.
+ */
+type HookShorthandStatus = {
+  isIdle: boolean;
+  isExecuting: boolean;
+  isTransitioning: boolean;
+  isPending: boolean;
+  hasSucceeded: boolean;
+  hasErrored: boolean;
+  hasNavigated: boolean;
+};
+/**
+ * Result shape when no action has completed yet (idle, executing, navigated).
+ */
+type HookIdleResult = {
+  data?: undefined;
+  serverError?: undefined;
+  validationErrors?: undefined;
+};
+/**
+ * Result shape for the success branch. For void-returning actions, collapses to `HookIdleResult`
+ * so that `result.data` is `undefined` rather than `void`.
+ */
+type HookSuccessResult<Data> = [Data] extends [void] ? HookIdleResult : {
+  data: Data;
+  serverError?: undefined;
+  validationErrors?: undefined;
+};
+/**
+ * Result shape for the error branch. Includes the idle shape for thrown errors
+ * (where `result` is `{}` and the error is captured internally).
+ */
+type HookErrorResult<ServerError, ShapedErrors> = HookIdleResult | {
+  data?: undefined;
+  serverError: ServerError;
+  validationErrors?: undefined;
+} | {
+  data?: undefined;
+  serverError?: undefined;
+  validationErrors: ShapedErrors;
+};
+/**
+ * Common properties shared across all status branches of the hook return type.
+ */
+type HookResultCommon<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data> = {
+  execute: (input: InferInputOrDefault<Schema, void>) => void;
+  executeAsync: (input: InferInputOrDefault<Schema, void>) => Promise<NormalizeActionResult<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>>;
+  input: InferInputOrDefault<Schema, undefined>;
+  reset: () => void;
+  isTransitioning: boolean;
+};
+/**
+ * Type of the return object of the `useAction` hook.
+ *
+ * This is a discriminated union keyed on `status` and the shorthand boolean
+ * properties (`hasSucceeded`, `hasErrored`, etc.). Checking any discriminant
+ * narrows the `result` type:
+ *
+ * ```ts
+ * const action = useAction(myAction);
+ * if (action.hasSucceeded) {
+ *   action.result.data        // Data (guaranteed)
+ *   action.result.serverError // undefined
+ * }
+ * ```
+ *
+ * Destructured narrowing works too (TypeScript 4.6+):
+ *
+ * ```ts
+ * const { status, result } = useAction(myAction);
+ * if (status === "hasSucceeded") {
+ *   result.data // narrowed to Data
+ * }
+ * ```
+ *
+ * `result` and `executeAsync` are run through `NormalizeActionResult` so that
+ * void-returning actions expose `result.data: undefined` rather than `void | undefined`.
+ *
+ * The optional `InitR` generic represents the shape of the `initResult` option. When provided,
+ * it narrows the idle branch's `result` to exactly that shape, so seeded fields are typed as
+ * required rather than `Data | undefined`. For example, `initResult: { data: { id: 1 } }` gives
+ * `result.data` the type `{ id: number }` on the idle branch, matching the runtime value that
+ * is seeded at mount and restored after `reset()`. Defaults to `HookIdleResult` (empty result)
+ * when `initResult` is not provided.
+ */
+type UseActionHookReturn<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data, InitR extends SafeActionResult<ServerError, Schema, ShapedErrors, Data> = HookIdleResult> = HookResultCommon<ServerError, Schema, ShapedErrors, Data> & ({
+  status: "idle";
+  isIdle: true;
+  isExecuting: false;
+  isPending: boolean;
+  hasSucceeded: false;
+  hasErrored: false;
+  hasNavigated: false;
+  result: Prettify<{
+    data: "data" extends keyof InitR ? InitR["data"] : undefined;
+    serverError: "serverError" extends keyof InitR ? InitR["serverError"] : undefined;
+    validationErrors: "validationErrors" extends keyof InitR ? InitR["validationErrors"] : undefined;
+  }>;
+} | {
+  status: "executing";
+  isIdle: false;
+  isExecuting: true;
+  isPending: true;
+  hasSucceeded: false;
+  hasErrored: false;
+  hasNavigated: false;
+  result: Prettify<NormalizeActionResult<SafeActionResult<ServerError, Schema, ShapedErrors, Data>>>;
+} | {
+  status: "hasSucceeded";
+  isIdle: false;
+  isExecuting: false;
+  isPending: boolean;
+  hasSucceeded: true;
+  hasErrored: false;
+  hasNavigated: false;
+  result: Prettify<HookSuccessResult<Data>>;
+} | {
+  status: "hasErrored";
+  isIdle: false;
+  isExecuting: false;
+  isPending: boolean;
+  hasSucceeded: false;
+  hasErrored: true;
+  hasNavigated: false;
+  result: Prettify<HookErrorResult<ServerError, ShapedErrors>>;
+} | {
+  status: "hasNavigated";
+  isIdle: false;
+  isExecuting: false;
+  isPending: boolean;
+  hasSucceeded: false;
+  hasErrored: false;
+  hasNavigated: true;
+  result: Prettify<HookIdleResult>;
+});
+/**
+ * Type of the return object of the `useOptimisticAction` hook.
+ * Extends `UseActionHookReturn` with `optimisticState`. TypeScript distributes
+ * the intersection over the union, preserving the discriminated union narrowing.
+ */
+type UseOptimisticActionHookReturn<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data, State, InitR extends SafeActionResult<ServerError, Schema, ShapedErrors, Data> = HookIdleResult> = UseActionHookReturn<ServerError, Schema, ShapedErrors, Data, InitR> & {
+  optimisticState: State;
+};
+/**
+ * Type of the return object of the `useStateAction` hook.
+ *
+ * Extends `UseActionHookReturn` with `formAction` for `<form action={formAction}>` integration.
+ * TypeScript distributes the intersection over the union, preserving the discriminated union narrowing.
+ * See `UseActionHookReturn` for how the `InitR` generic narrows the idle branch's `result`.
+ */
+type UseStateActionHookReturn<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data, InitR extends SafeActionResult<ServerError, Schema, ShapedErrors, Data> = HookIdleResult> = UseActionHookReturn<ServerError, Schema, ShapedErrors, Data, InitR> & {
+  formAction: (input: InferInputOrDefault<Schema, void>) => void;
+};
+/**
+ * Type of the return object of the `useOptimisticStateAction` hook.
+ *
+ * Extends `UseStateActionHookReturn` with `optimisticState`. TypeScript distributes the
+ * intersection over the union, preserving the discriminated union narrowing.
+ *
+ * `State` is the confirmed domain state, which is independent of the action's `Data`. When the
+ * action returns data, that data must be the full next `State`.
+ */
+type UseOptimisticStateActionHookReturn<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data, State, InitR extends SafeActionResult<ServerError, Schema, ShapedErrors, Data> = HookIdleResult> = UseStateActionHookReturn<ServerError, Schema, ShapedErrors, Data, InitR> & {
+  optimisticState: State;
+};
+/**
+ * Type of the return object of the `useAction` hook.
+ */
+type InferUseActionHookReturn<T extends Function> = T extends SafeActionFn<infer ServerError, infer Schema extends StandardSchemaV1 | undefined, any, infer ShapedErrors, infer Data> ? UseActionHookReturn<ServerError, Schema, ShapedErrors, Data> : never;
+/**
+ * Type of the return object of the `useOptimisticAction` hook.
+ */
+type InferUseOptimisticActionHookReturn<T extends Function, State = any> = T extends SafeActionFn<infer ServerError, infer Schema extends StandardSchemaV1 | undefined, any, infer ShapedErrors, infer Data> ? UseOptimisticActionHookReturn<ServerError, Schema, ShapedErrors, Data, State> : never;
+/**
+ * Type of the return object of the `useStateAction` hook.
+ */
+type InferUseStateActionHookReturn<T extends Function> = T extends SafeStateActionFn<infer ServerError, infer Schema extends StandardSchemaV1 | undefined, any, infer ShapedErrors, infer Data> ? UseStateActionHookReturn<ServerError, Schema, ShapedErrors, Data> : never;
+/**
+ * Deprecated aliases kept for backward compatibility.
+ */
+/**
+ * @deprecated Use `SingleInputActionFn` instead.
+ */
+type HookSafeActionFn<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data> = SingleInputActionFn<ServerError, Schema, ShapedErrors, Data>;
+/**
+ * @deprecated Use `SingleInputStateActionFn` instead.
+ */
+type HookSafeStateActionFn<ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data> = SingleInputStateActionFn<ServerError, Schema, ShapedErrors, Data>;
+//#endregion
+//#region src/hooks.d.ts
+/**
+ * Use the action from a Client Component via hook.
+ * @param safeActionFn The action function
+ * @param opts Optional configuration: `initResult` for initial state, plus callbacks
+ *
+ * {@link https://next-safe-action.dev/docs/execute-actions/hooks/useaction See docs for more information}
+ */
+declare const useAction: <ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data, InitR extends SafeActionResult<ServerError, Schema, ShapedErrors, Data> = HookIdleResult>(safeActionFn: SingleInputActionFn<ServerError, Schema, ShapedErrors, Data>, opts?: {
+  initResult?: InitR;
+} & HookBaseOptions<ServerError, Schema, ShapedErrors, Data>) => UseActionHookReturn<ServerError, Schema, ShapedErrors, Data, InitR>;
+/**
+ * Use the action from a Client Component via hook, with optimistic data update.
+ * @param safeActionFn The action function
+ * @param utils Required `currentData` and `updateFn`, optional `initResult` for initial state, and optional callbacks
+ *
+ * {@link https://next-safe-action.dev/docs/execute-actions/hooks/useoptimisticaction See docs for more information}
+ */
+declare const useOptimisticAction: <ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data, State, InitR extends SafeActionResult<ServerError, Schema, ShapedErrors, Data> = HookIdleResult>(safeActionFn: SingleInputActionFn<ServerError, Schema, ShapedErrors, Data>, utils: {
+  currentState: State;
+  updateFn: (state: State, input: InferInputOrDefault<Schema, void>) => State;
+  initResult?: InitR;
+} & HookBaseOptions<ServerError, Schema, ShapedErrors, Data>) => UseOptimisticActionHookReturn<ServerError, Schema, ShapedErrors, Data, State, InitR>;
+/**
+ * Enforces the contract documented on `UseOptimisticStateActionHookReturn`: when the action
+ * returns data, that data IS the full next confirmed state, because the hook adopts it as the
+ * confirmed value and hands it to the next queued dispatch as `prevResult`.
+ *
+ * An action that returns nothing is exempt, which is what the pending-changes-list shape relies
+ * on: there `Data` is `void` and `State` is an unrelated list of pending changes.
+ *
+ * Intersected onto the `utils` parameter rather than applied as a generic constraint, so `State`
+ * keeps its inference site on `currentState` and `Data` stays inferred from the action.
+ */
+type ActionDataFitsState<Data, State> = [Data] extends [State | void] ? unknown : never;
+/**
+ * Use the stateful action from a Client Component via hook. Used for actions defined with
+ * [`stateAction`](https://next-safe-action.dev/docs/define-actions/instance-methods#action--stateaction).
+ *
+ * Provides full lifecycle control: callbacks, status tracking, navigation error handling,
+ * `executeAsync`, `reset`, and `formAction` for `<form action={formAction}>` integration.
+ *
+ * Requires React 19+ (Next.js 15+). On older versions, a runtime error is thrown with guidance.
+ *
+ * @param safeActionFn The stateful action function created with `.stateAction()`.
+ * @param opts Optional configuration: `initResult` for initial state, plus all hook options and callbacks.
+ *
+ * {@link https://next-safe-action.dev/docs/execute-actions/hooks/usestateaction See docs for more information}
+ */
+declare const useStateAction: <ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data, InitR extends SafeActionResult<ServerError, Schema, ShapedErrors, Data> = HookIdleResult>(safeActionFn: SingleInputStateActionFn<ServerError, Schema, ShapedErrors, Data>, opts?: {
+  initResult?: InitR;
+} & HookBaseOptions<ServerError, Schema, ShapedErrors, Data>) => UseStateActionHookReturn<ServerError, Schema, ShapedErrors, Data, InitR>;
+/**
+ * Use the stateful action from a Client Component via hook, with optimistic state that is
+ * coordinated across overlapping mutations.
+ *
+ * Where `useOptimisticAction` is last-write-wins (a newer response discards an older one), this
+ * hook is built on `useActionState`, so dispatches are **queued**: each one waits for the previous
+ * to settle and receives its result as `prevResult`. That is what makes it correct for
+ * *accumulate* semantics (reorder an item, then reorder it again) rather than *replace* semantics.
+ *
+ * Confirmed state is the more recent of the action's successful `data` and the `currentState`
+ * option. So an action that returns the full next state owns the confirmed value, while an action
+ * that returns nothing leaves `currentState` authoritative, and a revalidated `currentState`
+ * always beats a stale client-side fold.
+ *
+ * "More recent" is judged by arrival for the value you render, and by write order for the base the
+ * next queued dispatch sends to the server. A `currentState` that commits while an action is still
+ * running was rendered before that action wrote, so it is the older value for the server base even
+ * though its identity is newer.
+ *
+ * Requires React 19+ (Next.js 15+). On older versions, a runtime error is thrown with guidance.
+ *
+ * @param safeActionFn The stateful action function created with `.stateAction()`.
+ * @param utils Required `currentState` and `updateFn`, optional `initResult` and callbacks.
+ *
+ * {@link https://next-safe-action.dev/docs/execute-actions/hooks/useoptimisticstateaction See docs for more information}
+ */
+declare const useOptimisticStateAction: <ServerError, Schema extends StandardSchemaV1 | undefined, ShapedErrors, Data, State, InitR extends SafeActionResult<ServerError, Schema, ShapedErrors, Data> = HookIdleResult>(safeActionFn: SingleInputStateActionFn<ServerError, Schema, ShapedErrors, Data>, utils: {
+  currentState: State;
+  updateFn: (state: State, input: InferInputOrDefault<Schema, void>) => State;
+  initResult?: InitR;
+} & HookBaseOptions<ServerError, Schema, ShapedErrors, Data> & ActionDataFitsState<Data, State>) => UseOptimisticStateActionHookReturn<ServerError, Schema, ShapedErrors, Data, State, InitR>;
+//#endregion
+export { type HookActionStatus, type HookBaseOptions, type HookCallbacks, type HookErrorResult, type HookIdleResult, type HookSafeActionFn, type HookSafeStateActionFn, type HookShorthandStatus, type HookSuccessResult, type InferUseActionHookReturn, type InferUseOptimisticActionHookReturn, type InferUseStateActionHookReturn, type SingleInputActionFn, type SingleInputStateActionFn, type UseActionHookReturn, type UseOptimisticActionHookReturn, type UseOptimisticStateActionHookReturn, type UseStateActionHookReturn, useAction, useOptimisticAction, useOptimisticStateAction, useStateAction };
+//# sourceMappingURL=hooks.d.mts.map

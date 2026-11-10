@@ -1,0 +1,611 @@
+import { t as FrameworkErrorHandler } from "./errors-9ViDxi_K.mjs";
+import * as React from "react";
+//#region src/hooks-utils.ts
+const getActionStatus = ({ isIdle, isExecuting, result, hasNavigated, hasThrownError }) => {
+	if (isIdle) return "idle";
+	else if (isExecuting) return "executing";
+	else if (hasThrownError || typeof result.validationErrors !== "undefined" || typeof result.serverError !== "undefined") return "hasErrored";
+	else if (hasNavigated) return "hasNavigated";
+	else return "hasSucceeded";
+};
+const getActionShorthandStatusObject = ({ status, isTransitioning }) => {
+	return {
+		isIdle: status === "idle",
+		isExecuting: status === "executing",
+		isTransitioning,
+		isPending: status === "executing" || isTransitioning && status !== "idle",
+		hasSucceeded: status === "hasSucceeded",
+		hasErrored: status === "hasErrored",
+		hasNavigated: status === "hasNavigated"
+	};
+};
+/**
+* Converts a callback to a ref to avoid triggering re-renders when passed as a
+* prop or avoid re-executing effects when passed as a dependency
+*/
+function useCallbackRef(callback) {
+	const callbackRef = React.useRef(callback);
+	React.useEffect(() => {
+		callbackRef.current = callback;
+	});
+	return React.useMemo(() => ((arg) => callbackRef.current?.(arg)), []);
+}
+const useActionCallbacks = ({ result, input, status, executionId, cb, throwOnNavigation, navigationError, thrownError }) => {
+	const onExecute = useCallbackRef(cb?.onExecute);
+	const onSuccess = useCallbackRef(cb?.onSuccess);
+	const onError = useCallbackRef(cb?.onError);
+	const onSettled = useCallbackRef(cb?.onSettled);
+	const onNavigation = useCallbackRef(cb?.onNavigation);
+	const lastHandledRef = React.useRef(null);
+	const lastExecutionIdRef = React.useRef(0);
+	const lastNavigationRef = React.useRef(null);
+	React.useEffect(() => {
+		const last = lastHandledRef.current;
+		if (last && last.status === status && last.result === result && last.input === input && last.navigationError === navigationError && last.thrownError === thrownError) return;
+		lastHandledRef.current = {
+			status,
+			result,
+			input,
+			navigationError,
+			thrownError
+		};
+		let navigationKind = null;
+		if (!throwOnNavigation && navigationError) {
+			const kind = FrameworkErrorHandler.getNavigationKind(navigationError);
+			const delivered = lastNavigationRef.current;
+			const alreadyDelivered = delivered?.error === navigationError && delivered.executionId === executionId;
+			if ((kind === "redirect" || status === "hasNavigated") && !alreadyDelivered) {
+				lastNavigationRef.current = {
+					error: navigationError,
+					executionId
+				};
+				navigationKind = kind;
+			}
+		}
+		const executeCallbacks = async () => {
+			switch (status) {
+				case "executing":
+					if (executionId === lastExecutionIdRef.current) break;
+					lastExecutionIdRef.current = executionId;
+					await Promise.resolve(onExecute?.({ input })).then(() => {});
+					break;
+				case "hasSucceeded":
+					if (navigationError || thrownError) break;
+					await Promise.all([Promise.resolve(onSuccess?.({
+						data: result.data,
+						input
+					})), Promise.resolve(onSettled?.({
+						result,
+						input
+					}))]);
+					break;
+				case "hasErrored": await Promise.all([Promise.resolve(onError?.({
+					error: {
+						...result,
+						...thrownError ? { thrownError } : {}
+					},
+					input
+				})), Promise.resolve(onSettled?.({
+					result,
+					input
+				}))]);
+			}
+			if (navigationKind === null) return;
+			await Promise.all([Promise.resolve(onNavigation?.({
+				input,
+				navigationKind
+			})), Promise.resolve(onSettled?.({
+				result,
+				input,
+				navigationKind
+			}))]);
+		};
+		executeCallbacks().catch(console.error);
+	}, [
+		input,
+		status,
+		executionId,
+		result,
+		throwOnNavigation,
+		navigationError,
+		thrownError,
+		onExecute,
+		onSuccess,
+		onSettled,
+		onError,
+		onNavigation
+	]);
+};
+//#endregion
+//#region src/hooks-shared.ts
+/**
+* Shared base hook for `useAction` and `useOptimisticAction`.
+* Extracts common state management, execution logic, and callback wiring.
+*
+* @param onTransitionStart Optional callback invoked inside `startTransition` before the action runs.
+*   Used by `useOptimisticAction` to call `setOptimisticValue`.
+*/
+function useActionBase(safeActionFn, opts, onTransitionStart) {
+	const initResultRef = React.useRef(opts?.initResult ?? {});
+	const [isTransitioning, startTransition] = React.useTransition();
+	const [result, setResult] = React.useState(initResultRef.current);
+	const [clientInput, setClientInput] = React.useState();
+	const [isExecuting, setIsExecuting] = React.useState(false);
+	const [navigationError, setNavigationError] = React.useState(null);
+	const [thrownError, setThrownError] = React.useState(null);
+	const [isIdle, setIsIdle] = React.useState(true);
+	const [executionId, setExecutionId] = React.useState(0);
+	const requestIdRef = React.useRef(0);
+	const beginExecution = React.useCallback((requestId, input) => {
+		const apply = () => {
+			setIsIdle(false);
+			setNavigationError(null);
+			setThrownError(null);
+			setClientInput(input);
+			setIsExecuting(true);
+			setExecutionId(requestId);
+		};
+		apply();
+		queueMicrotask(() => {
+			if (requestId !== requestIdRef.current) return;
+			apply();
+		});
+	}, []);
+	const onTransitionStartRef = React.useRef(onTransitionStart);
+	onTransitionStartRef.current = onTransitionStart;
+	const status = getActionStatus({
+		isExecuting,
+		result,
+		isIdle,
+		hasNavigated: navigationError !== null,
+		hasThrownError: thrownError !== null
+	});
+	const execute = React.useCallback((input) => {
+		const thisRequestId = ++requestIdRef.current;
+		beginExecution(thisRequestId, input);
+		startTransition(() => {
+			onTransitionStartRef.current?.(input);
+			safeActionFn(input).then((res) => {
+				if (thisRequestId !== requestIdRef.current) return;
+				setResult(res ?? {});
+			}).catch((e) => {
+				if (thisRequestId !== requestIdRef.current) return;
+				setResult({});
+				if (FrameworkErrorHandler.isNavigationError(e)) setNavigationError(e);
+				else setThrownError(e);
+			}).finally(() => {
+				if (thisRequestId !== requestIdRef.current) return;
+				setIsExecuting(false);
+			});
+		});
+	}, [beginExecution, safeActionFn]);
+	const executeAsync = React.useCallback((input) => {
+		return new Promise((resolve, reject) => {
+			const thisRequestId = ++requestIdRef.current;
+			beginExecution(thisRequestId, input);
+			startTransition(() => {
+				onTransitionStartRef.current?.(input);
+				safeActionFn(input).then((res) => {
+					if (thisRequestId === requestIdRef.current) setResult(res ?? {});
+					resolve(res);
+				}).catch((e) => {
+					if (thisRequestId === requestIdRef.current) {
+						setResult({});
+						if (FrameworkErrorHandler.isNavigationError(e)) setNavigationError(e);
+						else setThrownError(e);
+					}
+					reject(e);
+				}).finally(() => {
+					if (thisRequestId !== requestIdRef.current) return;
+					setIsExecuting(false);
+				});
+			});
+		});
+	}, [beginExecution, safeActionFn]);
+	const reset = React.useCallback(() => {
+		const thisRequestId = ++requestIdRef.current;
+		const apply = () => {
+			setIsIdle(true);
+			setNavigationError(null);
+			setThrownError(null);
+			setClientInput(void 0);
+			setResult(initResultRef.current);
+			setIsExecuting(false);
+		};
+		apply();
+		queueMicrotask(() => {
+			if (thisRequestId !== requestIdRef.current) return;
+			apply();
+		});
+	}, []);
+	useActionCallbacks({
+		result: result ?? {},
+		input: clientInput,
+		status,
+		executionId,
+		throwOnNavigation: opts?.throwOnNavigation === true,
+		navigationError,
+		thrownError,
+		cb: opts
+	});
+	if (opts?.throwOnNavigation === true && navigationError !== null) throw navigationError;
+	return {
+		isTransitioning,
+		result,
+		clientInput,
+		status,
+		execute,
+		executeAsync,
+		reset,
+		shorthandStatus: getActionShorthandStatusObject({
+			status,
+			isTransitioning
+		})
+	};
+}
+//#endregion
+//#region src/hooks.ts
+function fireCallback(cb, arg) {
+	if (!cb) return;
+	try {
+		Promise.resolve(cb(arg)).catch(console.error);
+	} catch (e) {
+		console.error(e);
+	}
+}
+/**
+* Use the action from a Client Component via hook.
+* @param safeActionFn The action function
+* @param opts Optional configuration: `initResult` for initial state, plus callbacks
+*
+* {@link https://next-safe-action.dev/docs/execute-actions/hooks/useaction See docs for more information}
+*/
+const useAction = (safeActionFn, opts) => {
+	const { result, clientInput, status, execute, executeAsync, reset, shorthandStatus } = useActionBase(safeActionFn, opts);
+	return {
+		execute,
+		executeAsync,
+		input: clientInput,
+		result,
+		reset,
+		status,
+		...shorthandStatus
+	};
+};
+/**
+* Use the action from a Client Component via hook, with optimistic data update.
+* @param safeActionFn The action function
+* @param utils Required `currentData` and `updateFn`, optional `initResult` for initial state, and optional callbacks
+*
+* {@link https://next-safe-action.dev/docs/execute-actions/hooks/useoptimisticaction See docs for more information}
+*/
+const useOptimisticAction = (safeActionFn, utils) => {
+	const [optimisticState, setOptimisticValue] = React.useOptimistic(utils.currentState, utils.updateFn);
+	const { currentState: _, updateFn: __, ...hookOpts } = utils;
+	const { result, clientInput, status, execute, executeAsync, reset, shorthandStatus } = useActionBase(safeActionFn, hookOpts, setOptimisticValue);
+	return {
+		execute,
+		executeAsync,
+		input: clientInput,
+		result,
+		optimisticState,
+		reset,
+		status,
+		...shorthandStatus
+	};
+};
+/**
+* Shared implementation behind `useStateAction` and `useOptimisticStateAction`.
+*
+* Owns every concurrency invariant of the stateful path: the React 19 guard, the FIFO resolver
+* queue that keeps `executeAsync` promises aligned with dispatch order, the reset generation that
+* marks uncancellable in-flight dispatches stale, the `queueMicrotask` double-apply that keeps a
+* dispatch visible inside an ambient transition, and the reset masking of `useActionState`'s
+* pending flag. `strategies` is the only extension point; the exported `useStateAction` passes none.
+*/
+const useStateActionInternal = (safeActionFn, opts, strategies) => {
+	if (typeof React.useActionState !== "function") throw new Error("useStateAction requires React 19+ (Next.js 15+). For older versions, use React's useActionState directly with your safe action.");
+	const initResultRef = React.useRef(opts?.initResult ?? {});
+	const asyncResolversRef = React.useRef([]);
+	const prevResultOverrideRef = React.useRef(null);
+	const resetGenerationRef = React.useRef(0);
+	const dispatchIdRef = React.useRef(0);
+	const strategiesRef = React.useRef(strategies);
+	strategiesRef.current = strategies;
+	const [navigationError, setNavigationError] = React.useState(null);
+	const [thrownError, setThrownError] = React.useState(null);
+	const [isIdle, setIsIdle] = React.useState(true);
+	const [isReset, setIsReset] = React.useState(false);
+	const [executionId, setExecutionId] = React.useState(0);
+	const [clientInput, setClientInput] = React.useState();
+	const [isTransitioning, startTransition] = React.useTransition();
+	const beginDispatch = React.useCallback((input) => {
+		const generation = resetGenerationRef.current;
+		const dispatchId = ++dispatchIdRef.current;
+		const apply = () => {
+			setIsIdle(false);
+			setIsReset(false);
+			setNavigationError(null);
+			setThrownError(null);
+			setClientInput(input);
+			setExecutionId(dispatchId);
+		};
+		apply();
+		queueMicrotask(() => {
+			if (generation !== resetGenerationRef.current) return;
+			apply();
+		});
+	}, []);
+	const wrappedAction = React.useCallback(async (prevResult, input) => {
+		const entry = asyncResolversRef.current.shift();
+		const asyncResolver = entry?.resolver ?? null;
+		const dispatchGeneration = entry?.generation ?? resetGenerationRef.current;
+		const dispatchId = entry?.dispatchId ?? dispatchIdRef.current;
+		const staleAfterReset = () => dispatchGeneration !== resetGenerationRef.current;
+		if (staleAfterReset()) {
+			asyncResolver?.resolve({});
+			return {};
+		}
+		const basePrevResult = prevResultOverrideRef.current ?? prevResult;
+		prevResultOverrideRef.current = null;
+		const effectivePrevResult = strategiesRef.current?.resolvePrevResult?.(basePrevResult) ?? basePrevResult;
+		try {
+			const result = await safeActionFn(effectivePrevResult, input) ?? {};
+			if (!staleAfterReset()) strategiesRef.current?.onDispatchSettled?.({ result }, input, dispatchId);
+			asyncResolver?.resolve(result);
+			return result;
+		} catch (e) {
+			if (FrameworkErrorHandler.isNavigationError(e)) {
+				if (!staleAfterReset()) {
+					setNavigationError(e);
+					strategiesRef.current?.onDispatchSettled?.({ navigationError: e }, input, dispatchId);
+				}
+				asyncResolver?.reject(e);
+				return {};
+			}
+			asyncResolver?.reject(e);
+			if (staleAfterReset()) return {};
+			setThrownError(e);
+			strategiesRef.current?.onDispatchSettled?.({ thrownError: e }, input, dispatchId);
+			for (const queued of asyncResolversRef.current.splice(0)) queued.resolver?.reject(e);
+			throw e;
+		}
+	}, [safeActionFn]);
+	const [rawResult, dispatcher, isExecuting] = React.useActionState(wrappedAction, initResultRef.current);
+	const dispatchWithResolver = React.useCallback((input, asyncResolver) => {
+		beginDispatch(input);
+		startTransition(() => {
+			strategiesRef.current?.onTransitionStart?.(input, resetGenerationRef.current, dispatchIdRef.current);
+			asyncResolversRef.current.push({
+				resolver: asyncResolver,
+				generation: resetGenerationRef.current,
+				dispatchId: dispatchIdRef.current
+			});
+			dispatcher(input);
+		});
+	}, [beginDispatch, dispatcher]);
+	const execute = React.useCallback((input) => {
+		dispatchWithResolver(input, null);
+	}, [dispatchWithResolver]);
+	const executeAsync = React.useCallback((input) => {
+		return new Promise((resolve, reject) => {
+			dispatchWithResolver(input, {
+				resolve,
+				reject
+			});
+		});
+	}, [dispatchWithResolver]);
+	const formAction = React.useCallback((input) => {
+		beginDispatch(input);
+		strategiesRef.current?.onTransitionStart?.(input, resetGenerationRef.current, dispatchIdRef.current);
+		asyncResolversRef.current.push({
+			resolver: null,
+			generation: resetGenerationRef.current,
+			dispatchId: dispatchIdRef.current
+		});
+		dispatcher(input);
+	}, [beginDispatch, dispatcher]);
+	const reset = React.useCallback(() => {
+		const generation = ++resetGenerationRef.current;
+		prevResultOverrideRef.current = initResultRef.current;
+		strategiesRef.current?.onReset?.(generation);
+		const apply = () => {
+			setIsIdle(true);
+			setIsReset(true);
+			setNavigationError(null);
+			setThrownError(null);
+			setClientInput(void 0);
+		};
+		apply();
+		queueMicrotask(() => {
+			if (generation !== resetGenerationRef.current) return;
+			apply();
+		});
+	}, []);
+	const result = isReset ? initResultRef.current : rawResult ?? {};
+	const isExecutingMasked = isExecuting && !isReset;
+	const status = getActionStatus({
+		isExecuting: isExecutingMasked,
+		result,
+		isIdle: isIdle && !isExecutingMasked,
+		hasNavigated: navigationError !== null,
+		hasThrownError: thrownError !== null
+	});
+	useActionCallbacks({
+		result,
+		input: clientInput,
+		status,
+		executionId,
+		cb: strategies?.suppressCallbacks ? void 0 : opts,
+		throwOnNavigation: opts?.throwOnNavigation === true,
+		navigationError,
+		thrownError
+	});
+	if (opts?.throwOnNavigation === true && navigationError !== null) throw navigationError;
+	return {
+		execute,
+		executeAsync,
+		formAction,
+		input: clientInput,
+		result,
+		reset,
+		status,
+		...getActionShorthandStatusObject({
+			status,
+			isTransitioning
+		})
+	};
+};
+/**
+* Use the stateful action from a Client Component via hook. Used for actions defined with
+* [`stateAction`](https://next-safe-action.dev/docs/define-actions/instance-methods#action--stateaction).
+*
+* Provides full lifecycle control: callbacks, status tracking, navigation error handling,
+* `executeAsync`, `reset`, and `formAction` for `<form action={formAction}>` integration.
+*
+* Requires React 19+ (Next.js 15+). On older versions, a runtime error is thrown with guidance.
+*
+* @param safeActionFn The stateful action function created with `.stateAction()`.
+* @param opts Optional configuration: `initResult` for initial state, plus all hook options and callbacks.
+*
+* {@link https://next-safe-action.dev/docs/execute-actions/hooks/usestateaction See docs for more information}
+*/
+const useStateAction = (safeActionFn, opts) => useStateActionInternal(safeActionFn, opts);
+/**
+* Use the stateful action from a Client Component via hook, with optimistic state that is
+* coordinated across overlapping mutations.
+*
+* Where `useOptimisticAction` is last-write-wins (a newer response discards an older one), this
+* hook is built on `useActionState`, so dispatches are **queued**: each one waits for the previous
+* to settle and receives its result as `prevResult`. That is what makes it correct for
+* *accumulate* semantics (reorder an item, then reorder it again) rather than *replace* semantics.
+*
+* Confirmed state is the more recent of the action's successful `data` and the `currentState`
+* option. So an action that returns the full next state owns the confirmed value, while an action
+* that returns nothing leaves `currentState` authoritative, and a revalidated `currentState`
+* always beats a stale client-side fold.
+*
+* "More recent" is judged by arrival for the value you render, and by write order for the base the
+* next queued dispatch sends to the server. A `currentState` that commits while an action is still
+* running was rendered before that action wrote, so it is the older value for the server base even
+* though its identity is newer.
+*
+* Requires React 19+ (Next.js 15+). On older versions, a runtime error is thrown with guidance.
+*
+* @param safeActionFn The stateful action function created with `.stateAction()`.
+* @param utils Required `currentState` and `updateFn`, optional `initResult` and callbacks.
+*
+* {@link https://next-safe-action.dev/docs/execute-actions/hooks/useoptimisticstateaction See docs for more information}
+*/
+const useOptimisticStateAction = (safeActionFn, utils) => {
+	const initialStateRef = React.useRef(utils.currentState);
+	const lastConfirmedRef = React.useRef(utils.currentState);
+	const lastServerDataRef = React.useRef(utils.currentState);
+	const lastPropRef = React.useRef(utils.currentState);
+	const supersededResultRef = React.useRef(null);
+	const [generation, setGeneration] = React.useState(0);
+	const settledIdRef = React.useRef(0);
+	const ackedThroughRef = React.useRef(0);
+	const ignoreCommittedDataRef = React.useRef(false);
+	const addOptimisticRef = React.useRef(null);
+	const utilsRef = React.useRef(utils);
+	const strategies = React.useMemo(() => ({
+		suppressCallbacks: true,
+		onTransitionStart: (input, dispatchGeneration, dispatchId) => {
+			addOptimisticRef.current?.({
+				generation: dispatchGeneration,
+				dispatchId,
+				input
+			});
+			fireCallback(utilsRef.current.onExecute, { input });
+		},
+		resolvePrevResult: () => ({ data: lastServerDataRef.current }),
+		onDispatchSettled: (outcome, input, dispatchId) => {
+			const cb = utilsRef.current;
+			settledIdRef.current = dispatchId;
+			if (outcome.navigationError) {
+				if (utilsRef.current.throwOnNavigation === true) return;
+				const navigationKind = FrameworkErrorHandler.getNavigationKind(outcome.navigationError);
+				fireCallback(cb.onNavigation, {
+					input,
+					navigationKind
+				});
+				fireCallback(cb.onSettled, {
+					result: {},
+					input,
+					navigationKind
+				});
+				return;
+			}
+			if (outcome.thrownError) {
+				fireCallback(cb.onError, {
+					error: { thrownError: outcome.thrownError },
+					input
+				});
+				fireCallback(cb.onSettled, {
+					result: {},
+					input
+				});
+				return;
+			}
+			const result = outcome.result ?? {};
+			ignoreCommittedDataRef.current = false;
+			if (typeof result.data !== "undefined") lastServerDataRef.current = result.data;
+			if (typeof result.validationErrors !== "undefined" || typeof result.serverError !== "undefined") fireCallback(cb.onError, {
+				error: result,
+				input
+			});
+			else fireCallback(cb.onSuccess, {
+				data: result.data,
+				input
+			});
+			fireCallback(cb.onSettled, {
+				result,
+				input
+			});
+		},
+		onReset: (resetGeneration) => {
+			lastConfirmedRef.current = initialStateRef.current;
+			lastServerDataRef.current = initialStateRef.current;
+			ignoreCommittedDataRef.current = true;
+			setGeneration(resetGeneration);
+		}
+	}), []);
+	const { currentState: _, updateFn: __, ...hookOpts } = utils;
+	const base = useStateActionInternal(safeActionFn, hookOpts, strategies);
+	const propChanged = utils.currentState !== lastPropRef.current;
+	const committedData = base.result.data;
+	const committedIsFresh = base.result !== supersededResultRef.current && !ignoreCommittedDataRef.current;
+	const confirmed = propChanged ? utils.currentState : committedIsFresh && typeof committedData !== "undefined" ? committedData : lastConfirmedRef.current;
+	const acked = propChanged ? settledIdRef.current : ackedThroughRef.current;
+	React.useLayoutEffect(() => {
+		if (propChanged) {
+			lastPropRef.current = utils.currentState;
+			lastServerDataRef.current = utils.currentState;
+			supersededResultRef.current = base.result;
+		}
+		lastConfirmedRef.current = confirmed;
+		ackedThroughRef.current = acked;
+		utilsRef.current = utils;
+	});
+	const [frame, addOptimistic] = React.useOptimistic({
+		generation,
+		acked,
+		state: confirmed
+	}, (current, payload) => payload.generation === current.generation && payload.dispatchId > current.acked ? {
+		generation: current.generation,
+		acked: current.acked,
+		state: utils.updateFn(current.state, payload.input)
+	} : current);
+	React.useLayoutEffect(() => {
+		addOptimisticRef.current = addOptimistic;
+	});
+	return {
+		...base,
+		optimisticState: frame.state
+	};
+};
+//#endregion
+export { useStateAction as i, useOptimisticAction as n, useOptimisticStateAction as r, useAction as t };
+
+//# sourceMappingURL=hooks-BNtcef07.mjs.map

@@ -1,0 +1,25 @@
+import * as React from 'react';
+import React__default from 'react';
+
+type ResponsiveRowProps$1 = Omit<React__default.ComponentPropsWithoutRef<'table'>, 'style'> & {
+    style?: Omit<React__default.CSSProperties, "padding" | "paddingLeft" | "paddingRight" | "paddingTop" | "paddingBottom" | "paddingInline" | "paddingBlock" | "maxWidth">;
+    maxWidth?: number;
+    paddingLeft?: number;
+    paddingRight?: number;
+    paddingTop?: number;
+    paddingBottom?: number;
+};
+
+type ResponsiveRowProps = ResponsiveRowProps$1;
+/**
+ * @example
+ * ```tsx
+ * <ResponsiveRow>
+ *   <ResponsiveColumn style={{ backgroundColor: 'green' }} span={2} />
+ *   <ResponsiveColumn style={{ backgroundColor: 'red' }} span={1} />
+ * </ResponsiveRow>
+ * ```
+ */
+declare const ResponsiveRow: (props: ResponsiveRowProps$1) => React.JSX.Element;
+
+export { ResponsiveRow, ResponsiveRowProps };

@@ -1,0 +1,800 @@
+import { t as FrameworkErrorHandler } from "./errors-9ViDxi_K.mjs";
+//#region src/deep-merge.ts
+/*!
+* This file is a deep-merge implementation adapted from `deepmerge-ts`
+* (https://github.com/RebeccaStevens/deepmerge-ts). Portions of the code below, in
+* particular the plain-record detection (`isRecord`), key collection (`getKeys`) and the
+* recursive record merge with its `__proto__` prototype-pollution guard, are derived from
+* that project and remain under its original license, reproduced in full below.
+*
+* BSD 3-Clause License
+*
+* Copyright (c) 2021, Rebecca Stevens
+* All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted provided that the following conditions are met:
+*
+* 1. Redistributions of source code must retain the above copyright notice, this
+*    list of conditions and the following disclaimer.
+*
+* 2. Redistributions in binary form must reproduce the above copyright notice,
+*    this list of conditions and the following disclaimer in the documentation
+*    and/or other materials provided with the distribution.
+*
+* 3. Neither the name of the copyright holder nor the names of its
+*    contributors may be used to endorse or promote products derived from
+*    this software without specific prior written permission.
+*
+* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+* AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+* DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+* FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+* SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+* CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+* OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+* OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+/**
+* Internal deep-merge utility.
+*
+* Inlined from, and trimmed down to only what this library needs of, `deepmerge-ts`, so
+* that next-safe-action ships with zero runtime dependencies and is not exposed to
+* supply-chain attacks targeting third-party packages.
+*
+* The library only ever calls `deepmerge(a, b)` with two plain middleware context objects,
+* so this reproduces deepmerge-ts's *default* merge behavior for that case:
+* - plain records (objects) are merged recursively;
+* - arrays are concatenated;
+* - Sets are unioned and Maps are combined (later entries win on key conflict);
+* - any other or mismatched values: the last (rightmost) value wins.
+*/
+const validRecordToStringValues = ["[object Object]", "[object Module]"];
+/**
+* Whether the given value is a plain record, as opposed to an array, Set, Map, class
+* instance, or other exotic object. Mirrors deepmerge-ts's record detection.
+*/
+function isRecord(value) {
+	if (typeof value !== "object" || value === null) return false;
+	if (!validRecordToStringValues.includes(Object.prototype.toString.call(value))) return false;
+	const { constructor } = value;
+	if (constructor === void 0) return true;
+	const prototype = constructor.prototype;
+	if (prototype === null || typeof prototype !== "object" || !validRecordToStringValues.includes(Object.prototype.toString.call(prototype))) return false;
+	if (!Object.hasOwn(prototype, "isPrototypeOf")) return false;
+	return true;
+}
+/**
+* The union of both objects' own enumerable string keys and own symbol keys, in
+* first-then-second insertion order.
+*/
+function getKeys(a, b) {
+	const keys = /* @__PURE__ */ new Set();
+	for (const object of [a, b]) for (const key of [...Object.keys(object), ...Object.getOwnPropertySymbols(object)]) keys.add(key);
+	return keys;
+}
+/**
+* Whether `object` has `property` as an own enumerable property.
+*/
+function objectHasProperty(object, property) {
+	return Object.prototype.propertyIsEnumerable.call(object, property);
+}
+/**
+* Merge two values according to the default strategy described at the top of this file.
+*/
+function mergeValues(a, b) {
+	if (isRecord(a) && isRecord(b)) return mergeRecords(a, b);
+	if (Array.isArray(a) && Array.isArray(b)) return [...a, ...b];
+	if (a instanceof Set && b instanceof Set) return /* @__PURE__ */ new Set([...a, ...b]);
+	if (a instanceof Map && b instanceof Map) return new Map([...a, ...b]);
+	return b;
+}
+/**
+* Recursively merge two plain records into a fresh object.
+*/
+function mergeRecords(a, b) {
+	const result = {};
+	for (const key of getKeys(a, b)) {
+		const inA = objectHasProperty(a, key);
+		const inB = objectHasProperty(b, key);
+		if (!inA && !inB) continue;
+		let value;
+		if (inA && inB) value = mergeValues(a[key], b[key]);
+		else if (inB) value = b[key];
+		else value = a[key];
+		if (key === "__proto__") Object.defineProperty(result, key, {
+			value,
+			configurable: true,
+			enumerable: true,
+			writable: true
+		});
+		else result[key] = value;
+	}
+	return result;
+}
+/**
+* Deeply merge the given objects, with the last value winning on conflict. The library
+* always calls this with exactly two middleware context objects.
+*/
+function deepmerge(...objects) {
+	let result = objects[0] ?? {};
+	for (let index = 1; index < objects.length; index++) result = mergeValues(result, objects[index]);
+	return result;
+}
+//#endregion
+//#region src/utils.ts
+const DEFAULT_SERVER_ERROR_MESSAGE = "Something went wrong while executing the operation.";
+/**
+* Checks if passed argument is an instance of Error.
+*/
+const isError = (error) => error instanceof Error;
+/**
+* Checks what the winning boolean value is from a series of values, from lowest to highest priority.
+* `null` and `undefined` values are skipped.
+*/
+const winningBoolean = (...args) => {
+	return args.reduce((acc, v) => typeof v === "boolean" ? v : acc, false);
+};
+function encodeDigestPayload(marker, payload, nonSerializableMessage) {
+	let encoded;
+	try {
+		encoded = JSON.stringify(payload);
+	} catch {
+		encoded = void 0;
+	}
+	if (typeof encoded === "undefined") throw new TypeError(nonSerializableMessage);
+	return `${marker};${encoded}`;
+}
+function decodeDigestPayload(marker, e) {
+	if (typeof e === "object" && e !== null && "digest" in e && typeof e.digest === "string") {
+		const sep = e.digest.indexOf(";");
+		if (sep !== -1 && e.digest.slice(0, sep) === marker) try {
+			return { value: JSON.parse(e.digest.slice(sep + 1), (key, value) => key === "__proto__" ? void 0 : value) };
+		} catch {
+			return;
+		}
+	}
+}
+//#endregion
+//#region src/server-error.ts
+const SERVER_ERROR_DIGEST = "NEXT_SAFE_ACTION_SERVER_ERROR";
+var ActionServerError = class extends Error {
+	digest;
+	constructor(serverError) {
+		super("Server Action server error occurred");
+		this.digest = encodeDigestPayload(SERVER_ERROR_DIGEST, serverError, "The value passed to `returnServerError` must be JSON-serializable (no circular references, BigInts, functions, etc.).");
+	}
+};
+function extractServerError(e) {
+	return decodeDigestPayload(SERVER_ERROR_DIGEST, e);
+}
+/**
+* Return a typed, expected server error to the client from the action's server code function or
+* from middleware. Code declared after this function invocation will not be executed.
+*
+* The value is returned to the client as `result.serverError`, bypassing `handleServerError`,
+* so it should conform to the client's `ServerError` type (inferred from `handleServerError`'s
+* return type). It must be JSON-serializable, since it crosses the server/client boundary (and,
+* with `cacheComponents` enabled, the `'use cache'` RSC boundary).
+*
+* @param serverError Server error value returned to the client
+*
+* {@link https://next-safe-action.dev/docs/concepts/error-handling#expected-server-errors-with-returnservererror See docs for more information}
+*/
+function returnServerError(serverError) {
+	throw new ActionServerError(serverError);
+}
+//#endregion
+//#region src/standard-schema.ts
+function isStandardSchema(value) {
+	if (value === null || typeof value !== "object" && typeof value !== "function") return false;
+	const standardProps = value["~standard"];
+	if (standardProps === null || typeof standardProps !== "object") return false;
+	return standardProps.version === 1 && typeof standardProps.validate === "function";
+}
+async function standardParse(schema, value) {
+	return schema["~standard"].validate(value);
+}
+//#endregion
+//#region src/validation-errors.ts
+const getKey = (segment) => typeof segment === "object" ? segment.key : segment;
+const getIssueMessage = (issue) => {
+	if (issue.unionErrors) return issue.unionErrors.flatMap((u) => u.issues.map((i) => i.message));
+	return [issue.message];
+};
+const setOwnProperty = (obj, key, value) => {
+	Object.defineProperty(obj, key, {
+		value,
+		writable: true,
+		enumerable: true,
+		configurable: true
+	});
+};
+const buildValidationErrors = (issues) => {
+	const ve = {};
+	for (const issue of issues) {
+		const { path } = issue;
+		if (!path || path.length === 0) {
+			const issueMessages = getIssueMessage(issue);
+			ve._errors = ve._errors ? [...ve._errors, ...issueMessages] : [...issueMessages];
+			continue;
+		}
+		let ref = ve;
+		for (let i = 0; i < path.length - 1; i++) {
+			const k = getKey(path[i]);
+			if (!Object.hasOwn(ref, k)) setOwnProperty(ref, k, {});
+			ref = ref[k];
+		}
+		const key = getKey(path[path.length - 1]);
+		const issueMessage = getIssueMessage(issue);
+		const existing = Object.hasOwn(ref, key) ? structuredClone(ref[key]) : {};
+		setOwnProperty(ref, key, existing._errors ? {
+			...existing,
+			_errors: [...existing._errors, ...issueMessage]
+		} : {
+			...existing,
+			_errors: [...issueMessage]
+		});
+	}
+	return ve;
+};
+const SERVER_VALIDATION_ERROR_DIGEST = "NEXT_SAFE_ACTION_SERVER_VALIDATION_ERROR";
+var ActionServerValidationError = class extends Error {
+	digest;
+	constructor(validationErrors) {
+		super("Server Action server validation error(s) occurred");
+		this.digest = encodeDigestPayload(SERVER_VALIDATION_ERROR_DIGEST, validationErrors, "The validation errors object passed to `returnValidationErrors` must be JSON-serializable (no circular references, BigInts, functions, etc.).");
+	}
+};
+function extractServerValidationErrors(e) {
+	return decodeDigestPayload(SERVER_VALIDATION_ERROR_DIGEST, e)?.value;
+}
+var ActionValidationError = class extends Error {
+	validationErrors;
+	constructor(validationErrors, overriddenErrorMessage) {
+		super(overriddenErrorMessage ?? "Server Action validation error(s) occurred");
+		this.validationErrors = validationErrors;
+	}
+};
+var ActionBindArgsValidationError = class extends Error {
+	validationErrors;
+	constructor(validationErrors) {
+		super("Server Action bind args validation error(s) occurred");
+		this.validationErrors = validationErrors;
+	}
+};
+/**
+* Return custom validation errors to the client from the action's server code function.
+* Code declared after this function invocation will not be executed.
+* @param schema Input schema
+* @param validationErrors Validation errors object
+*
+* {@link https://next-safe-action.dev/docs/define-actions/validation-errors#returnvalidationerrors See docs for more information}
+*/
+function returnValidationErrors(schema, validationErrors) {
+	throw new ActionServerValidationError(validationErrors);
+}
+/**
+* Default validation errors format.
+* Emulation of `zod`'s [`format`](https://zod.dev/ERROR_HANDLING?id=formatting-errors) function.
+*/
+function formatValidationErrors(validationErrors) {
+	return validationErrors;
+}
+/**
+* Transform default formatted validation errors into flattened structure.
+* `formErrors` contains global errors, and `fieldErrors` contains errors for each field,
+* one level deep. It discards errors for nested fields.
+* Emulation of `zod`'s [`flatten`](https://zod.dev/ERROR_HANDLING?id=flattening-errors) function.
+* @param {ValidationErrors} [validationErrors] Validation errors object
+*
+* {@link https://next-safe-action.dev/docs/define-actions/validation-errors#flattenvalidationerrorsutility-function See docs for more information}
+*/
+function flattenValidationErrors(validationErrors) {
+	const flattened = {
+		formErrors: [],
+		fieldErrors: {}
+	};
+	for (const [key, value] of Object.entries(validationErrors ?? {})) if (key === "_errors" && Array.isArray(value)) flattened.formErrors = [...value];
+	else if (value !== null && typeof value === "object" && "_errors" in value) setOwnProperty(flattened.fieldErrors, key, [...value._errors]);
+	return flattened;
+}
+/**
+* This error is thrown when an action metadata is invalid, i.e. when there's a mismatch between the
+* type of the metadata schema returned from `defineMetadataSchema` and the actual data passed.
+*/
+var ActionMetadataValidationError = class extends Error {
+	validationErrors;
+	constructor(validationErrors) {
+		super("Invalid metadata input. Please be sure to pass metadata via `metadata` method before defining the action.");
+		this.name = "ActionMetadataError";
+		this.validationErrors = validationErrors;
+	}
+};
+/**
+* This error is thrown when an action's data (output) is invalid, i.e. when there's a mismatch between the
+* type of the data schema passed to `dataSchema` method and the actual return of the action.
+*/
+var ActionOutputDataValidationError = class extends Error {
+	validationErrors;
+	constructor(validationErrors) {
+		super("Invalid action data (output). Please be sure to return data following the shape of the schema passed to `dataSchema` method.");
+		this.name = "ActionOutputDataError";
+		this.validationErrors = validationErrors;
+	}
+};
+//#endregion
+//#region src/action-builder.ts
+function actionBuilder(args) {
+	const bindArgsSchemas = args.bindArgsSchemas ?? [];
+	async function validateMetadata() {
+		if (!args.metadataSchema) return;
+		const parsedMd = await standardParse(args.metadataSchema, args.metadata);
+		if (parsedMd.issues) throw new ActionMetadataValidationError(buildValidationErrors(parsedMd.issues));
+	}
+	async function validateInputs(mainClientInput, bindArgsClientInputs, currentCtx, middlewareResult) {
+		const parsedBindArgsResults = await Promise.all(bindArgsSchemas.map((schema, i) => standardParse(schema, bindArgsClientInputs[i])));
+		const parsedMainInputResult = typeof args.inputSchemaFn === "undefined" ? { value: void 0 } : await standardParse(await args.inputSchemaFn(mainClientInput), mainClientInput);
+		let hasBindValidationErrors = false;
+		const bindArgsValidationErrors = Array(bindArgsSchemas.length).fill({});
+		const parsedBindArgsInputs = [];
+		for (let i = 0; i < parsedBindArgsResults.length; i++) {
+			const parsedInput = parsedBindArgsResults[i];
+			if (!parsedInput.issues) parsedBindArgsInputs.push(parsedInput.value);
+			else {
+				bindArgsValidationErrors[i] = buildValidationErrors(parsedInput.issues);
+				hasBindValidationErrors = true;
+			}
+		}
+		let parsedMainInput = void 0;
+		if (!parsedMainInputResult.issues) parsedMainInput = parsedMainInputResult.value;
+		else {
+			const validationErrors = buildValidationErrors(parsedMainInputResult.issues);
+			middlewareResult.validationErrors = await Promise.resolve(args.handleValidationErrorsShape(validationErrors, {
+				clientInput: mainClientInput,
+				bindArgsClientInputs,
+				ctx: currentCtx,
+				metadata: args.metadata
+			}));
+		}
+		if (hasBindValidationErrors) throw new ActionBindArgsValidationError(bindArgsValidationErrors);
+		if (middlewareResult.validationErrors) return null;
+		return {
+			parsedMainInput,
+			parsedBindArgsInputs
+		};
+	}
+	async function runServerCode(serverCodeFn, parsedMainInput, parsedBindArgsInputs, mainClientInput, bindArgsClientInputs, currentCtx, middlewareResult, frameworkErrorHandler, withState, prevResult) {
+		const serverCodeArgs = [{
+			parsedInput: parsedMainInput,
+			bindArgsParsedInputs: parsedBindArgsInputs,
+			clientInput: mainClientInput,
+			bindArgsClientInputs,
+			ctx: currentCtx,
+			metadata: args.metadata
+		}];
+		if (withState) serverCodeArgs.push({ prevResult: structuredClone(prevResult) });
+		let data = await serverCodeFn(...serverCodeArgs).catch((e) => frameworkErrorHandler.handleError(e));
+		if (typeof args.outputSchema !== "undefined" && !frameworkErrorHandler.error) {
+			const parsedData = await standardParse(args.outputSchema, data);
+			if (parsedData.issues) throw new ActionOutputDataValidationError(buildValidationErrors(parsedData.issues));
+			data = parsedData.value;
+		}
+		if (frameworkErrorHandler.error) {
+			middlewareResult.success = false;
+			middlewareResult.navigationKind = FrameworkErrorHandler.getNavigationKind(frameworkErrorHandler.error);
+		} else {
+			middlewareResult.success = true;
+			middlewareResult.data = data;
+		}
+		middlewareResult.parsedInput = parsedMainInput;
+		middlewareResult.bindArgsParsedInputs = parsedBindArgsInputs;
+	}
+	async function handleExecutionError(e, mainClientInput, bindArgsClientInputs, currentCtx, middlewareResult, serverErrorHandled) {
+		const serverValidationErrors = extractServerValidationErrors(e);
+		if (typeof serverValidationErrors !== "undefined") {
+			middlewareResult.validationErrors = await Promise.resolve(args.handleValidationErrorsShape(serverValidationErrors, {
+				clientInput: mainClientInput,
+				bindArgsClientInputs,
+				ctx: currentCtx,
+				metadata: args.metadata
+			}));
+			return;
+		}
+		const expectedServerError = extractServerError(e);
+		if (typeof expectedServerError !== "undefined") {
+			middlewareResult.serverError = expectedServerError.value;
+			return;
+		}
+		if (serverErrorHandled.value) throw e;
+		serverErrorHandled.value = true;
+		const error = isError(e) ? e : /* @__PURE__ */ new Error(DEFAULT_SERVER_ERROR_MESSAGE);
+		middlewareResult.serverError = await Promise.resolve(args.handleServerError(error, {
+			clientInput: mainClientInput,
+			bindArgsClientInputs,
+			ctx: currentCtx,
+			metadata: args.metadata
+		}));
+	}
+	async function buildResultAndRunCallbacks(middlewareResult, frameworkErrorHandler, mainClientInput, bindArgsClientInputs, currentCtx, utils) {
+		const callbackPromises = [];
+		if (frameworkErrorHandler.error) {
+			const navigationKind = FrameworkErrorHandler.getNavigationKind(frameworkErrorHandler.error);
+			callbackPromises.push(utils?.onNavigation?.({
+				metadata: args.metadata,
+				ctx: currentCtx,
+				clientInput: mainClientInput,
+				bindArgsClientInputs,
+				navigationKind
+			}));
+			callbackPromises.push(utils?.onSettled?.({
+				metadata: args.metadata,
+				ctx: currentCtx,
+				clientInput: mainClientInput,
+				bindArgsClientInputs,
+				result: {},
+				navigationKind
+			}));
+			await Promise.all(callbackPromises.filter((p) => typeof p !== "undefined"));
+			throw frameworkErrorHandler.error;
+		}
+		if (typeof middlewareResult.validationErrors !== "undefined") {
+			if (winningBoolean(args.throwValidationErrors, typeof utils?.throwValidationErrors === "undefined" ? void 0 : Boolean(utils.throwValidationErrors))) {
+				const overrideErrorMessageFn = typeof utils?.throwValidationErrors === "object" && utils?.throwValidationErrors.overrideErrorMessage ? utils?.throwValidationErrors.overrideErrorMessage : void 0;
+				throw new ActionValidationError(middlewareResult.validationErrors, await overrideErrorMessageFn?.(middlewareResult.validationErrors));
+			}
+		} else if (typeof middlewareResult.serverError !== "undefined" && utils?.throwServerError) throw middlewareResult.serverError;
+		const hasValidationError = typeof middlewareResult.validationErrors !== "undefined";
+		const hasServerError = typeof middlewareResult.serverError !== "undefined";
+		const treatAsSuccess = middlewareResult.success && !hasValidationError && !hasServerError;
+		let actionResult;
+		if (hasValidationError) actionResult = { validationErrors: middlewareResult.validationErrors };
+		else if (hasServerError) actionResult = { serverError: middlewareResult.serverError };
+		else if (treatAsSuccess && typeof middlewareResult.data !== "undefined") actionResult = { data: middlewareResult.data };
+		else actionResult = {};
+		if (treatAsSuccess) callbackPromises.push(utils?.onSuccess?.({
+			metadata: args.metadata,
+			ctx: currentCtx,
+			data: middlewareResult.data,
+			clientInput: mainClientInput,
+			bindArgsClientInputs,
+			parsedInput: middlewareResult.parsedInput,
+			bindArgsParsedInputs: middlewareResult.bindArgsParsedInputs
+		}));
+		else callbackPromises.push(utils?.onError?.({
+			metadata: args.metadata,
+			ctx: currentCtx,
+			clientInput: mainClientInput,
+			bindArgsClientInputs,
+			error: actionResult
+		}));
+		callbackPromises.push(utils?.onSettled?.({
+			metadata: args.metadata,
+			ctx: currentCtx,
+			clientInput: mainClientInput,
+			bindArgsClientInputs,
+			result: actionResult
+		}));
+		await Promise.all(callbackPromises.filter((p) => typeof p !== "undefined"));
+		return actionResult;
+	}
+	function buildAction({ withState }) {
+		return { action: (serverCodeFn, utils) => {
+			return async (...clientInputs) => {
+				let currentCtx = {};
+				const middlewareResult = { success: false };
+				let prevResult = {};
+				const frameworkErrorHandler = new FrameworkErrorHandler();
+				const serverErrorHandled = { value: false };
+				let chainCompleted = false;
+				if (withState) prevResult = clientInputs.splice(bindArgsSchemas.length, 1)[0];
+				const mainClientInput = clientInputs[bindArgsSchemas.length];
+				const bindArgsClientInputs = clientInputs.slice(0, bindArgsSchemas.length);
+				try {
+					await validateMetadata();
+				} catch (e) {
+					await handleExecutionError(e, mainClientInput, bindArgsClientInputs, currentCtx, middlewareResult, serverErrorHandled);
+					return buildResultAndRunCallbacks(middlewareResult, frameworkErrorHandler, mainClientInput, bindArgsClientInputs, currentCtx, utils);
+				}
+				const executeValidatedMiddlewareStack = async (idx, parsedMainInput, parsedBindArgsInputs) => {
+					if (frameworkErrorHandler.error) return;
+					const validatedMiddlewareFn = args.validatedMiddlewareFns[idx];
+					middlewareResult.ctx = currentCtx;
+					try {
+						if (validatedMiddlewareFn) {
+							let nextCalled = false;
+							await validatedMiddlewareFn({
+								parsedInput: parsedMainInput,
+								clientInput: mainClientInput,
+								bindArgsParsedInputs: parsedBindArgsInputs,
+								bindArgsClientInputs,
+								ctx: currentCtx,
+								metadata: args.metadata,
+								next: async (nextOpts) => {
+									if (chainCompleted) throw new Error("next() called after the middleware chain has already completed. Do not store and call next() asynchronously after the action has returned.");
+									if (nextCalled) throw new Error("next() called multiple times in middleware. Each middleware must call next() at most once.");
+									nextCalled = true;
+									currentCtx = deepmerge(currentCtx, nextOpts?.ctx ?? {});
+									await executeValidatedMiddlewareStack(idx + 1, parsedMainInput, parsedBindArgsInputs);
+									return middlewareResult;
+								}
+							}).catch((e) => {
+								frameworkErrorHandler.handleError(e);
+								if (frameworkErrorHandler.error) {
+									middlewareResult.success = false;
+									middlewareResult.navigationKind = FrameworkErrorHandler.getNavigationKind(frameworkErrorHandler.error);
+								}
+							});
+						} else await runServerCode(serverCodeFn, parsedMainInput, parsedBindArgsInputs, mainClientInput, bindArgsClientInputs, currentCtx, middlewareResult, frameworkErrorHandler, withState, prevResult);
+					} catch (e) {
+						await handleExecutionError(e, mainClientInput, bindArgsClientInputs, currentCtx, middlewareResult, serverErrorHandled);
+					}
+				};
+				const executeMiddlewareStack = async (idx = 0) => {
+					if (frameworkErrorHandler.error) return;
+					const middlewareFn = args.middlewareFns[idx];
+					middlewareResult.ctx = currentCtx;
+					try {
+						if (middlewareFn) {
+							let nextCalled = false;
+							await middlewareFn({
+								clientInput: mainClientInput,
+								bindArgsClientInputs,
+								ctx: currentCtx,
+								metadata: args.metadata,
+								next: async (nextOpts) => {
+									if (chainCompleted) throw new Error("next() called after the middleware chain has already completed. Do not store and call next() asynchronously after the action has returned.");
+									if (nextCalled) throw new Error("next() called multiple times in middleware. Each middleware must call next() at most once.");
+									nextCalled = true;
+									currentCtx = deepmerge(currentCtx, nextOpts?.ctx ?? {});
+									await executeMiddlewareStack(idx + 1);
+									return middlewareResult;
+								}
+							}).catch((e) => {
+								frameworkErrorHandler.handleError(e);
+								if (frameworkErrorHandler.error) {
+									middlewareResult.success = false;
+									middlewareResult.navigationKind = FrameworkErrorHandler.getNavigationKind(frameworkErrorHandler.error);
+								}
+							});
+						} else {
+							const validated = await validateInputs(mainClientInput, bindArgsClientInputs, currentCtx, middlewareResult);
+							if (!validated) return;
+							const { parsedMainInput, parsedBindArgsInputs } = validated;
+							await executeValidatedMiddlewareStack(0, parsedMainInput, parsedBindArgsInputs);
+						}
+					} catch (e) {
+						await handleExecutionError(e, mainClientInput, bindArgsClientInputs, currentCtx, middlewareResult, serverErrorHandled);
+					}
+				};
+				await executeMiddlewareStack();
+				chainCompleted = true;
+				return buildResultAndRunCallbacks(middlewareResult, frameworkErrorHandler, mainClientInput, bindArgsClientInputs, currentCtx, utils);
+			};
+		} };
+	}
+	return {
+		/**
+		* Define the action.
+		* @param serverCodeFn Code that will be executed on the **server side**
+		*
+		* {@link https://next-safe-action.dev/docs/define-actions/instance-methods#action--stateaction See docs for more information}
+		*/
+		action: buildAction({ withState: false }).action,
+		/**
+		* Define the stateful action. To be used with the [`useStateAction`](https://next-safe-action.dev/docs/execute-actions/hooks/usestateaction) hook.
+		* @param serverCodeFn Code that will be executed on the **server side**
+		*
+		* {@link https://next-safe-action.dev/docs/define-actions/instance-methods#action--stateaction See docs for more information}
+		*/
+		stateAction: buildAction({ withState: true }).action
+	};
+}
+//#endregion
+//#region src/safe-action-client.ts
+var SafeActionClient = class SafeActionClient {
+	#args;
+	constructor(args) {
+		this.#args = args;
+	}
+	/**
+	* Use a middleware function. Middleware added via `use()` always runs **before** input validation.
+	* Cannot be called after `useValidated()`.
+	* @param middlewareFn Middleware function
+	*
+	* {@link https://next-safe-action.dev/docs/define-actions/instance-methods#use See docs for more information}
+	*/
+	use(middlewareFn) {
+		if (this.#args.hasValidatedMiddleware) throw new Error("use() cannot be called after useValidated(). Move all use() calls before useValidated().");
+		return new SafeActionClient({
+			...this.#args,
+			middlewareFns: [...this.#args.middlewareFns, middlewareFn],
+			ctxType: {},
+			preValidationCtxType: {}
+		});
+	}
+	/**
+	* Use a validated middleware function. Middleware added via `useValidated()` runs **after** input
+	* validation and receives typed `parsedInput` and `bindArgsParsedInputs`. Follows the onion model:
+	* code before `next()` runs pre-action, code after `next()` runs post-action with access to the result.
+	*
+	* Requires `inputSchema()` or `bindArgsSchemas()` to be called before. After calling `useValidated()`,
+	* `inputSchema()`, `bindArgsSchemas()`, and `use()` can no longer be called.
+	*
+	* @example
+	* ```ts
+	* authClient
+	*   .inputSchema(z.object({ postId: z.string() }))
+	*   .useValidated(async ({ parsedInput, ctx, next }) => {
+	*     const post = await db.post.findUnique({ where: { id: parsedInput.postId } });
+	*     if (post?.authorId !== ctx.user.id) throw new Error("Forbidden");
+	*     return next({ ctx: { post } });
+	*   })
+	* ```
+	*
+	* @param middlewareFn Validated middleware function
+	*
+	* {@link https://next-safe-action.dev/docs/define-actions/instance-methods#usevalidated See docs for more information}
+	*/
+	useValidated(middlewareFn) {
+		return new SafeActionClient({
+			...this.#args,
+			validatedMiddlewareFns: [...this.#args.validatedMiddlewareFns, middlewareFn],
+			ctxType: {},
+			preValidationCtxType: {},
+			hasValidatedMiddleware: true,
+			handleValidationErrorsShape: this.#args.handleValidationErrorsShape
+		});
+	}
+	/**
+	* Define metadata for the action.
+	* @param data Metadata with the same type as the return value of the [`defineMetadataSchema`](https://next-safe-action.dev/docs/define-actions/create-the-client#definemetadataschema) optional initialization function
+	*
+	* {@link https://next-safe-action.dev/docs/define-actions/instance-methods#metadata See docs for more information}
+	*/
+	metadata(data) {
+		return new SafeActionClient({
+			...this.#args,
+			metadata: data,
+			metadataProvided: true
+		});
+	}
+	/**
+	* Define the input validation schema for the action.
+	* Cannot be called after `useValidated()`.
+	* @param inputSchema Input validation schema
+	* @param utils Optional utils object
+	*
+	* {@link https://next-safe-action.dev/docs/define-actions/create-the-client#inputschema See docs for more information}
+	*/
+	inputSchema(inputSchema, utils) {
+		const isDirectStandardSchema = isStandardSchema(inputSchema);
+		const isInputSchemaFactoryFn = !isDirectStandardSchema && typeof inputSchema === "function" && Object.prototype.toString.call(inputSchema) === "[object AsyncFunction]";
+		if (!isDirectStandardSchema && typeof inputSchema === "function" && !isInputSchemaFactoryFn) throw new TypeError("`inputSchema()` received a function that is not a Standard Schema validator. Pass a Standard Schema validator (`~standard.validate`) directly, or use an async function to build/extend the schema.");
+		return new SafeActionClient({
+			...this.#args,
+			inputSchemaFn: isInputSchemaFactoryFn ? async (clientInput) => {
+				return inputSchema(await this.#args.inputSchemaFn?.(clientInput), { clientInput });
+			} : async () => inputSchema,
+			handleValidationErrorsShape: utils?.handleValidationErrorsShape ?? this.#args.handleValidationErrorsShape
+		});
+	}
+	/**
+	* @deprecated Alias for `inputSchema` method. Use that instead.
+	*/
+	schema = this.inputSchema;
+	/**
+	* Define the bind args input validation schema for the action.
+	* Cannot be called after `useValidated()`.
+	* @param bindArgsSchemas Bind args input validation schemas
+	*
+	* {@link https://next-safe-action.dev/docs/define-actions/instance-methods#bindargsschemas See docs for more information}
+	*/
+	bindArgsSchemas(bindArgsSchemas) {
+		return new SafeActionClient({
+			...this.#args,
+			bindArgsSchemas,
+			handleValidationErrorsShape: this.#args.handleValidationErrorsShape
+		});
+	}
+	/**
+	* Define the output data validation schema for the action.
+	* @param schema Output data validation schema
+	*
+	* {@link https://next-safe-action.dev/docs/define-actions/create-the-client#outputschema See docs for more information}
+	*/
+	outputSchema(dataSchema) {
+		return new SafeActionClient({
+			...this.#args,
+			outputSchema: dataSchema
+		});
+	}
+	/**
+	* Define the action.
+	* @param serverCodeFn Code that will be executed on the **server side**
+	* @param [cb] Optional callbacks that will be called after action execution, on the server.
+	*
+	* {@link https://next-safe-action.dev/docs/define-actions/instance-methods#action--stateaction See docs for more information}
+	*/
+	action(serverCodeFn, utils) {
+		return actionBuilder(this.#args).action(serverCodeFn, utils);
+	}
+	/**
+	* Define the stateful action.
+	* To be used with the [`useStateAction`](https://next-safe-action.dev/docs/execute-actions/hooks/usestateaction) hook.
+	* @param serverCodeFn Code that will be executed on the **server side**
+	* @param [cb] Optional callbacks that will be called after action execution, on the server.
+	*
+	* {@link https://next-safe-action.dev/docs/define-actions/instance-methods#action--stateaction See docs for more information}
+	*/
+	stateAction(serverCodeFn, utils) {
+		return actionBuilder(this.#args).stateAction(serverCodeFn, utils);
+	}
+};
+//#endregion
+//#region src/middleware.ts
+/**
+* Creates a standalone middleware function. It accepts a generic object with optional `serverError`, `ctx` and `metadata`
+* properties, if you need one or all of them to be typed. The type for each property that is passed as generic is the
+* **minimum** shape required to define the middleware function, but it can also be larger than that.
+*
+* {@link https://next-safe-action.dev/docs/define-actions/middleware#create-standalone-middleware See docs for more information}
+*/
+const createMiddleware = () => {
+	return { define: (middlewareFn) => middlewareFn };
+};
+/**
+* Creates a standalone validated middleware function. It accepts a generic object with optional `serverError`, `ctx`,
+* `metadata`, `parsedInput`, `clientInput`, `bindArgsParsedInputs`, and `bindArgsClientInputs` properties, if you need
+* one or all of them to be typed. The type for each property that is passed as generic is the **minimum** shape required
+* to define the validated middleware function, but it can also be larger than that.
+*
+* Validated middleware runs after input validation and receives typed parsed inputs.
+*
+* {@link https://next-safe-action.dev/docs/define-actions/middleware#create-standalone-validated-middleware See docs for more information}
+*/
+const createValidatedMiddleware = () => {
+	return { define: (middlewareFn) => middlewareFn };
+};
+//#endregion
+//#region src/index.ts
+/**
+* Detect Next.js navigation/framework errors (redirect, notFound, forbidden, unauthorized, etc.)
+* that must be re-thrown to let the framework handle them.
+*/
+function isNavigationError(error) {
+	return FrameworkErrorHandler.isNavigationError(error);
+}
+/**
+* Create a new safe action client.
+* Works with any validation library implementing the Standard Schema v1 spec (Zod, Valibot, Yup, etc.).
+* @param createOpts Initialization options
+*
+* {@link https://next-safe-action.dev/docs/define-actions/create-the-client#initialization-options See docs for more information}
+*/
+const createSafeActionClient = (createOpts) => {
+	return new SafeActionClient({
+		middlewareFns: [async ({ next }) => next({ ctx: {} })],
+		validatedMiddlewareFns: [],
+		handleServerError: createOpts?.handleServerError || ((e) => {
+			console.error("Action error:", e.message);
+			return "Something went wrong while executing the operation.";
+		}),
+		inputSchemaFn: void 0,
+		bindArgsSchemas: [],
+		outputSchema: void 0,
+		ctxType: {},
+		preValidationCtxType: {},
+		metadataSchema: createOpts?.defineMetadataSchema?.() ?? void 0,
+		metadata: void 0,
+		defaultValidationErrorsShape: createOpts?.defaultValidationErrorsShape ?? "formatted",
+		throwValidationErrors: createOpts?.throwValidationErrors ?? false,
+		handleValidationErrorsShape: async (ve) => createOpts?.defaultValidationErrorsShape === "flattened" ? flattenValidationErrors(ve) : formatValidationErrors(ve)
+	});
+};
+//#endregion
+export { ActionBindArgsValidationError, ActionMetadataValidationError, ActionOutputDataValidationError, ActionValidationError, DEFAULT_SERVER_ERROR_MESSAGE, createMiddleware, createSafeActionClient, createValidatedMiddleware, flattenValidationErrors, formatValidationErrors, isNavigationError, returnServerError, returnValidationErrors };
+
+//# sourceMappingURL=index.mjs.map
